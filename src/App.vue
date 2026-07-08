@@ -182,6 +182,8 @@ const transformerRef = ref(null)
 const nodeRefs = ref({})
 const editingId = ref(null)
 const editingTextTarget = ref('text')
+const draggedLayerId = ref(null)
+const dragOverLayerId = ref(null)
 const isImageDragActive = ref(false)
 const qrLink = ref('')
 const qrError = ref('')
@@ -199,6 +201,7 @@ const defaultImageSettings = {
   cropBottom: 0
 }
 const shapeTypes = ['rect', 'circle', 'polygon', 'line']
+const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'line', 'arrow']
 const fillableShapeTypes = ['rect', 'circle', 'polygon']
 const cornerRadiusFields = [
   { label: 'Top left', index: 0 },
@@ -228,6 +231,8 @@ const defaultChartSettings = {
   xAxisLabel: 'X axis',
   yAxisLabel: 'Y axis',
   chartData: '12, 48, 32, 76, 54, 92, 68',
+  xAxisValues: '0, 1, 2, 3, 4, 5, 6',
+  yAxisValues: '12, 48, 32, 76, 54, 92, 68',
   stroke: '#2563eb',
   fill: '#93c5fd',
   fillOpacity: 0.35,
@@ -410,6 +415,15 @@ const chartItems = computed(() => elements.value.filter(i => i.type === 'chart')
 const shapeTextItems = computed(() => elements.value.filter(i => shapeTypes.includes(i.type) && i.shapeRichImage))
 const canvasItems = computed(() => elements.value.filter(item => !item.tableGroup))
 const hasCanvasElements = computed(() => elements.value.length > 0)
+const layerSidebarItems = computed(() => (
+  canvasItems.value
+    .map((item, layerIndex) => ({
+      item,
+      layerIndex,
+      title: getLayerItemTitle(item)
+    }))
+    .reverse()
+))
 
 // Table elements (rects and text) handled separately to keep positioning group-logical
 const tableItems = computed(() => elements.value.filter(i => i.tableGroup))
@@ -424,6 +438,7 @@ const canMoveSelectedBackward = computed(() => selectedLayerIndex.value > 0)
 const canMoveSelectedForward = computed(() => (
   selectedLayerIndex.value >= 0 && selectedLayerIndex.value < canvasItems.value.length - 1
 ))
+const selectedElementDimensions = computed(() => getElementDimensionReadout(selectedItem.value))
 const canGroupSelected = computed(() => (
   selectedItems.value.length > 1 &&
   selectedItems.value.every(item => item.type !== 'group')
@@ -985,37 +1000,51 @@ function addTable() {
   const cellW = 100
   const cellH = 40
   const groupId = Date.now()
+  const children = []
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      // background cell
-      elements.value.push({
+      children.push({
         id: `${groupId}-cell-${r}-${c}`,
         type: 'rect',
-        x: 200 + c * cellW,
-        y: 200 + r * cellH,
+        x: c * cellW,
+        y: r * cellH,
         width: cellW,
         height: cellH,
         fill: '#fff',
         stroke: '#000',
         strokeWidth: 1,
-        draggable: false,
-        tableGroup: groupId
+        draggable: false
       })
 
-      // text inside cell
-      elements.value.push({
+      children.push({
         id: `${groupId}-text-${r}-${c}`,
         type: 'text',
         text: `${r},${c}`,
-        x: 200 + c * cellW + 10,
-        y: 200 + r * cellH + 10,
+        x: c * cellW + 10,
+        y: r * cellH + 10,
         fontSize: 14,
-        draggable: false,
-        tableGroup: groupId
+        draggable: false
       })
     }
   }
+
+  elements.value.push({
+    id: groupId,
+    type: 'group',
+    title: 'Table',
+    groupKind: 'table',
+    tableRows: rows,
+    tableCols: cols,
+    x: 200,
+    y: 200,
+    width: cols * cellW,
+    height: rows * cellH,
+    draggable: true,
+    children
+  })
+
+  nextTick(() => selectElement(groupId))
 }
 
 /* -------------------------
@@ -1240,6 +1269,10 @@ function ensureImageSettings(item) {
 function ensureChartSettings(item) {
   if (!item || item.type !== 'chart') return
 
+  if (item.yAxisValues === undefined && item.chartData !== undefined) {
+    item.yAxisValues = item.chartData
+  }
+
   Object.entries(defaultChartSettings).forEach(([key, value]) => {
     if (item[key] === undefined) item[key] = value
   })
@@ -1447,7 +1480,7 @@ function getRotatedPoint(originX, originY, localX, localY, rotation = 0) {
   }
 }
 
-function getLineLocalBounds(item) {
+function getLineRawBounds(item) {
   const points = item.points || []
   const xs = []
   const ys = []
@@ -1462,7 +1495,8 @@ function getLineLocalBounds(item) {
       minX: 0,
       minY: 0,
       width: 160,
-      height: 1
+      height: 0,
+      pointCount: 0
     }
   }
 
@@ -1474,9 +1508,208 @@ function getLineLocalBounds(item) {
   return {
     minX,
     minY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY)
+    width: maxX - minX,
+    height: maxY - minY,
+    pointCount: xs.length
   }
+}
+
+function getLineLocalBounds(item) {
+  const bounds = getLineRawBounds(item)
+
+  return {
+    ...bounds,
+    width: Math.max(1, bounds.width),
+    height: Math.max(1, bounds.height)
+  }
+}
+
+function getFallbackElementPixelDimensions(item) {
+  if (!item) return null
+
+  const rotation = Number(item.rotation) || 0
+
+  if (['text', 'image', 'rect', 'chart', 'group'].includes(item.type)) {
+    return {
+      width: Math.max(0, Number(item.width) || 0),
+      height: Math.max(0, Number(item.height) || 0),
+      rotation
+    }
+  }
+
+  if (item.type === 'circle' || item.type === 'polygon') {
+    const diameter = Math.max(0, (Number(item.radius) || 0) * 2)
+
+    return {
+      width: diameter,
+      height: diameter,
+      rotation
+    }
+  }
+
+  if (item.type === 'line' || item.type === 'arrow') {
+    const bounds = getLineLocalBounds(item)
+
+    return {
+      width: bounds.width,
+      height: bounds.height,
+      rotation
+    }
+  }
+
+  if (item.type === 'label') {
+    const fontSize = Number(item.textConfig?.fontSize) || 14
+    const padding = Number(item.textConfig?.padding) || 0
+    const text = String(item.text || '')
+
+    return {
+      width: text.length * fontSize * 0.65 + padding * 2,
+      height: fontSize + padding * 2,
+      rotation
+    }
+  }
+
+  return null
+}
+
+function getElementPixelDimensions(item) {
+  const fallback = getFallbackElementPixelDimensions(item)
+  const rect = item ? nodeRefs.value[item.id]?.getClientRect?.() : null
+
+  if (rect) {
+    return {
+      width: Math.max(0, rect.width),
+      height: Math.max(0, rect.height)
+    }
+  }
+
+  return fallback
+}
+
+function formatDimensionNumber(value, decimals = 2) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) return '0'
+
+  return Number(numericValue.toFixed(decimals)).toString()
+}
+
+function formatDimensionPair(width, height, unit, decimals = 2) {
+  return `${formatDimensionNumber(width, decimals)} x ${formatDimensionNumber(height, decimals)} ${unit}`
+}
+
+function getElementDimensionReadout(item) {
+  const dimensions = getElementPixelDimensions(item)
+
+  if (!dimensions) return null
+
+  const widthPx = dimensions.width
+  const heightPx = dimensions.height
+  const widthInches = widthPx / PX_PER_INCH
+  const heightInches = heightPx / PX_PER_INCH
+  const widthCm = widthInches * CM_PER_INCH
+  const heightCm = heightInches * CM_PER_INCH
+
+  return {
+    px: formatDimensionPair(widthPx, heightPx, 'px', 0),
+    cm: formatDimensionPair(widthCm, heightCm, 'cm'),
+    in: formatDimensionPair(widthInches, heightInches, 'in')
+  }
+}
+
+function canEditElementDimensions(item) {
+  return dimensionEditableTypes.includes(item?.type)
+}
+
+function getEditableElementDimensions(item) {
+  if (!canEditElementDimensions(item)) return null
+
+  if (item.type === 'image' || item.type === 'rect') {
+    return {
+      width: Math.max(1, Number(item.width) || 1),
+      height: Math.max(1, Number(item.height) || 1)
+    }
+  }
+
+  if (item.type === 'circle' || item.type === 'polygon') {
+    const diameter = Math.max(1, (Number(item.radius) || 0) * 2)
+
+    return {
+      width: diameter,
+      height: diameter
+    }
+  }
+
+  if (item.type === 'line' || item.type === 'arrow') {
+    const bounds = getLineLocalBounds(item)
+
+    return {
+      width: bounds.width,
+      height: bounds.height
+    }
+  }
+
+  return null
+}
+
+function getEditableElementDimensionValue(item, dimension) {
+  const dimensions = getEditableElementDimensions(item)
+
+  return dimensions ? formatDimensionNumber(dimensions[dimension], 0) : '1'
+}
+
+function getDimensionInputValue(value, fallback) {
+  const numericValue = Math.round(Number.parseFloat(value))
+
+  if (!Number.isFinite(numericValue)) return Math.max(1, Math.round(fallback || 1))
+
+  return Math.max(1, numericValue)
+}
+
+function resizeLineElementDimension(item, dimension, targetValue) {
+  const points = Array.isArray(item.points) ? item.points : []
+  const bounds = getLineRawBounds(item)
+  const pointCount = Math.max(1, bounds.pointCount || points.length / 2)
+  const targetWidth = dimension === 'width' ? targetValue : bounds.width
+  const targetHeight = dimension === 'height' ? targetValue : bounds.height
+  const nextPoints = []
+
+  for (let index = 0; index < points.length; index += 2) {
+    const pointIndex = index / 2
+    const x = Number(points[index]) || 0
+    const y = Number(points[index + 1]) || 0
+    const fallbackRatio = pointCount > 1 ? pointIndex / (pointCount - 1) : 0
+    const xRatio = bounds.width
+      ? (x - bounds.minX) / bounds.width
+      : fallbackRatio
+    const yRatio = bounds.height
+      ? (y - bounds.minY) / bounds.height
+      : fallbackRatio
+
+    nextPoints.push(
+      bounds.minX + xRatio * targetWidth,
+      bounds.minY + yRatio * targetHeight
+    )
+  }
+
+  item.points = nextPoints
+}
+
+function setEditableElementDimension(item, dimension, value) {
+  if (!canEditElementDimensions(item)) return
+
+  const currentDimensions = getEditableElementDimensions(item)
+  const targetValue = getDimensionInputValue(value, currentDimensions?.[dimension])
+
+  if (item.type === 'image' || item.type === 'rect') {
+    item[dimension] = targetValue
+  } else if (item.type === 'circle' || item.type === 'polygon') {
+    item.radius = targetValue / 2
+  } else if (item.type === 'line' || item.type === 'arrow') {
+    resizeLineElementDimension(item, dimension, targetValue)
+  }
+
+  updateTransformerSelection()
 }
 
 function getShapeTextCenter(item) {
@@ -1733,13 +1966,56 @@ function getChartHitAreaConfig(item) {
   }
 }
 
-function parseChartValues(item) {
-  const values = String(item.chartData || '')
+function parseChartNumberList(value) {
+  return String(value || '')
     .split(/[\s,;]+/)
-    .map(value => Number(value.trim()))
+    .map(entry => Number(entry.trim()))
     .filter(Number.isFinite)
+}
 
-  return values.length ? values : [0]
+function getChartSeries(item) {
+  const ySource = item.yAxisValues !== undefined ? item.yAxisValues : item.chartData
+  const yValues = parseChartNumberList(ySource)
+  const xValues = parseChartNumberList(item.xAxisValues)
+  const hasXValues = xValues.length > 0
+  const nextYValues = yValues.length ? yValues : [0]
+  const pointCount = hasXValues
+    ? Math.max(1, Math.min(xValues.length, nextYValues.length))
+    : nextYValues.length
+
+  return {
+    xValues: hasXValues
+      ? xValues.slice(0, pointCount)
+      : nextYValues.map((_, index) => index),
+    yValues: nextYValues.slice(0, pointCount)
+  }
+}
+
+function getChartRange(values) {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+
+  return {
+    min,
+    max,
+    range: max - min
+  }
+}
+
+function formatChartAxisValue(value) {
+  if (!Number.isFinite(value)) return ''
+  if (Number.isInteger(value)) return String(value)
+
+  return Number(value.toFixed(2)).toString()
+}
+
+function getChartTickValues(min, max, count = 4) {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return []
+  if (min === max) return [min]
+
+  return Array.from({ length: count + 1 }, (_, index) => (
+    min + (max - min) * index / count
+  ))
 }
 
 function getChartPlotMeta(item) {
@@ -1749,16 +2025,17 @@ function getChartPlotMeta(item) {
   const hasXAxisLabel = Boolean(item.xAxisLabel)
   const hasYAxisLabel = Boolean(item.yAxisLabel)
   const padding = 14
-  const leftPadding = padding + (hasYAxisLabel ? 24 : 0)
-  const rightPadding = padding
+  const axisValueLabelWidth = 30
+  const axisValueLabelHeight = 16
+  const leftPadding = padding + axisValueLabelWidth + (hasYAxisLabel ? 24 : 0)
+  const rightPadding = padding + 8
   const topPadding = padding + (hasTitle ? 22 : 0)
-  const bottomPadding = padding + (hasXAxisLabel ? 24 : 0)
+  const bottomPadding = padding + axisValueLabelHeight + (hasXAxisLabel ? 24 : 0)
   const plotWidth = Math.max(1, width - leftPadding - rightPadding)
   const plotHeight = Math.max(1, height - topPadding - bottomPadding)
-  const values = parseChartValues(item)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = max - min || 1
+  const series = getChartSeries(item)
+  const xRange = getChartRange(series.xValues)
+  const yRange = getChartRange(series.yValues)
 
   return {
     padding,
@@ -1770,24 +2047,35 @@ function getChartPlotMeta(item) {
     height,
     plotWidth,
     plotHeight,
-    values,
-    min,
-    max,
-    range
+    xValues: series.xValues,
+    yValues: series.yValues,
+    minX: xRange.min,
+    maxX: xRange.max,
+    xRange: xRange.range,
+    minY: yRange.min,
+    maxY: yRange.max,
+    yRange: yRange.range
   }
+}
+
+function getChartPointPosition(meta, xValue, yValue) {
+  const x = meta.xRange
+    ? meta.leftPadding + (xValue - meta.minX) / meta.xRange * meta.plotWidth
+    : meta.leftPadding + meta.plotWidth / 2
+  const y = meta.yRange
+    ? meta.topPadding + (meta.maxY - yValue) / meta.yRange * meta.plotHeight
+    : meta.topPadding + meta.plotHeight / 2
+
+  return { x, y }
 }
 
 function getChartLinePoints(item) {
   const meta = getChartPlotMeta(item)
-  const step = meta.values.length > 1 ? meta.plotWidth / (meta.values.length - 1) : 0
 
-  return meta.values.flatMap((value, index) => {
-    const x = meta.values.length > 1
-      ? meta.leftPadding + step * index
-      : meta.leftPadding + meta.plotWidth / 2
-    const y = meta.topPadding + (meta.max - value) / meta.range * meta.plotHeight
+  return meta.yValues.flatMap((value, index) => {
+    const point = getChartPointPosition(meta, meta.xValues[index], value)
 
-    return [x, y]
+    return [point.x, point.y]
   })
 }
 
@@ -1812,15 +2100,24 @@ function getChartGridLines(item) {
 
   const meta = getChartPlotMeta(item)
   const lines = []
-  const count = 4
+  const yTicks = getChartTickValues(meta.minY, meta.maxY)
+  const xTicks = getChartTickValues(meta.minX, meta.maxX)
 
-  for (let i = 0; i <= count; i++) {
-    const y = meta.topPadding + meta.plotHeight / count * i
+  yTicks.forEach((value, index) => {
+    const { y } = getChartPointPosition(meta, meta.minX, value)
     lines.push({
-      id: `h-${i}`,
+      id: `h-${index}`,
       points: [meta.leftPadding, y, meta.width - meta.rightPadding, y]
     })
-  }
+  })
+
+  xTicks.forEach((value, index) => {
+    const { x } = getChartPointPosition(meta, value, meta.minY)
+    lines.push({
+      id: `v-${index}`,
+      points: [x, meta.topPadding, x, meta.topPadding + meta.plotHeight]
+    })
+  })
 
   return lines
 }
@@ -1890,6 +2187,48 @@ function getChartPointConfigs(item) {
   }
 
   return pointConfigs
+}
+
+function getChartAxisValueLabelConfigs(item) {
+  const meta = getChartPlotMeta(item)
+  const labels = []
+  const fontSize = 9
+  const yTicks = getChartTickValues(meta.minY, meta.maxY)
+  const xTicks = getChartTickValues(meta.minX, meta.maxX)
+
+  yTicks.forEach((value, index) => {
+    const { y } = getChartPointPosition(meta, meta.minX, value)
+
+    labels.push({
+      id: `y-${index}`,
+      x: Math.max(0, meta.leftPadding - 32),
+      y: y - fontSize / 2,
+      width: 28,
+      text: formatChartAxisValue(value),
+      fontSize,
+      fill: '#64748b',
+      align: 'right',
+      listening: false
+    })
+  })
+
+  xTicks.forEach((value, index) => {
+    const { x } = getChartPointPosition(meta, value, meta.minY)
+
+    labels.push({
+      id: `x-${index}`,
+      x: x - 18,
+      y: meta.topPadding + meta.plotHeight + 4,
+      width: 36,
+      text: formatChartAxisValue(value),
+      fontSize,
+      fill: '#64748b',
+      align: 'center',
+      listening: false
+    })
+  })
+
+  return labels
 }
 
 function getChartTitleConfig(item) {
@@ -2013,9 +2352,48 @@ function isTextAlignActive(alignment) {
    SELECT ELEMENT
 --------------------------*/
 
-function reorderSelectedLayer(targetLayerIndex) {
+function truncateLayerText(value, maxLength = 28) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+
+  if (!text) return ''
+  if (text.length <= maxLength) return text
+
+  return `${text.slice(0, maxLength - 3)}...`
+}
+
+function getLayerTitleSuffix(value) {
+  const preview = truncateLayerText(value)
+
+  return preview ? `: ${preview}` : ''
+}
+
+function getLayerItemTitle(item) {
+  if (!item) return 'Element'
+
+  if (item.type === 'text') return `Text${getLayerTitleSuffix(item.text)}`
+  if (item.type === 'image') return 'Image'
+  if (item.type === 'rect') return `Rectangle${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'circle') return `Circle${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'polygon') return `Polygon${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'line') return `Line${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'arrow') return 'Arrow'
+  if (item.type === 'label') return `Label${getLayerTitleSuffix(item.text)}`
+  if (item.type === 'chart') return `Graph${getLayerTitleSuffix(item.chartTitle)}`
+  if (item.type === 'group' && item.groupKind === 'table') {
+    return `Table (${item.tableRows || 0} x ${item.tableCols || 0})`
+  }
+  if (item.type === 'group') return `${item.title || 'Group'} (${item.children?.length || 0})`
+
+  return String(item.type || 'Element')
+}
+
+function getCanvasItemById(id) {
+  return canvasItems.value.find(item => String(item.id) === String(id)) || null
+}
+
+function reorderCanvasItemLayer(itemId, targetLayerIndex) {
   const layerItems = canvasItems.value
-  const currentLayerIndex = selectedLayerIndex.value
+  const currentLayerIndex = layerItems.findIndex(item => String(item.id) === String(itemId))
 
   if (
     currentLayerIndex < 0 ||
@@ -2029,13 +2407,13 @@ function reorderSelectedLayer(targetLayerIndex) {
   const item = layerItems[currentLayerIndex]
   const targetItem = layerItems[targetLayerIndex]
   const nextElements = [...elements.value]
-  const currentElementIndex = nextElements.findIndex(element => element.id === item.id)
+  const currentElementIndex = nextElements.findIndex(element => String(element.id) === String(item.id))
 
   if (currentElementIndex < 0) return
 
   nextElements.splice(currentElementIndex, 1)
 
-  const targetElementIndex = nextElements.findIndex(element => element.id === targetItem.id)
+  const targetElementIndex = nextElements.findIndex(element => String(element.id) === String(targetItem.id))
   const insertIndex = targetLayerIndex > currentLayerIndex
     ? targetElementIndex + 1
     : targetElementIndex
@@ -2044,6 +2422,12 @@ function reorderSelectedLayer(targetLayerIndex) {
   elements.value = nextElements
 
   nextTick(() => selectElement(item.id))
+}
+
+function reorderSelectedLayer(targetLayerIndex) {
+  if (selectedId.value === null) return
+
+  reorderCanvasItemLayer(selectedId.value, targetLayerIndex)
 }
 
 function moveSelectedLayerBackward() {
@@ -2101,6 +2485,64 @@ function selectElements(ids) {
 
 function selectElement(id) {
   selectElements([id])
+}
+
+function selectLayerSidebarItem(item) {
+  if (!item) return
+
+  if (editingId.value && editingId.value !== item.id) {
+    finishTextEditing()
+  }
+
+  selectElement(item.id)
+}
+
+function handleLayerDragStart(event, item) {
+  if (!item) return
+
+  draggedLayerId.value = item.id
+  dragOverLayerId.value = null
+  selectLayerSidebarItem(item)
+
+  if (!event.dataTransfer) return
+
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(item.id))
+}
+
+function handleLayerDragOver(event, item) {
+  if (!item || draggedLayerId.value === null || String(draggedLayerId.value) === String(item.id)) return
+
+  event.preventDefault()
+  dragOverLayerId.value = item.id
+
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+function handleLayerDragLeave(item) {
+  if (String(dragOverLayerId.value) === String(item?.id)) {
+    dragOverLayerId.value = null
+  }
+}
+
+function handleLayerDrop(event, targetItem) {
+  event.preventDefault()
+
+  const draggedId = event.dataTransfer?.getData('text/plain') || draggedLayerId.value
+  const targetLayerIndex = canvasItems.value.findIndex(item => String(item.id) === String(targetItem?.id))
+
+  draggedLayerId.value = null
+  dragOverLayerId.value = null
+
+  if (!draggedId || targetLayerIndex < 0 || String(draggedId) === String(targetItem?.id)) return
+  if (!getCanvasItemById(draggedId)) return
+
+  reorderCanvasItemLayer(draggedId, targetLayerIndex)
+}
+
+function handleLayerDragEnd() {
+  draggedLayerId.value = null
+  dragOverLayerId.value = null
 }
 
 function toggleElementSelection(id) {
@@ -2822,6 +3264,43 @@ function updateTransform(e, id) {
         Double-click text to edit it. Press Ctrl+Enter or use Done to finish.
       </p>
 
+      <div class="image-editor-panel layer-list-panel">
+        <div class="panel-title">Layers</div>
+
+        <div
+            v-if="layerSidebarItems.length"
+            class="layer-list"
+            aria-label="Canvas layers"
+        >
+          <div
+              v-for="entry in layerSidebarItems"
+              :key="entry.item.id"
+              class="layer-list-item"
+              :class="{
+                active: selectedIds.includes(entry.item.id),
+                dragging: String(draggedLayerId) === String(entry.item.id),
+                'drag-over': String(dragOverLayerId) === String(entry.item.id)
+              }"
+              draggable="true"
+              role="button"
+              tabindex="0"
+              @click="selectLayerSidebarItem(entry.item)"
+              @keydown.enter.prevent="selectLayerSidebarItem(entry.item)"
+              @keydown.space.prevent="selectLayerSidebarItem(entry.item)"
+              @dragstart="handleLayerDragStart($event, entry.item)"
+              @dragover="handleLayerDragOver($event, entry.item)"
+              @dragleave="handleLayerDragLeave(entry.item)"
+              @drop="handleLayerDrop($event, entry.item)"
+              @dragend="handleLayerDragEnd"
+          >
+            <span class="layer-list-title">{{ entry.title }}</span>
+            <span class="layer-list-meta">Layer {{ entry.layerIndex + 1 }}</span>
+          </div>
+        </div>
+
+        <p v-else class="empty-layer-list">No elements yet</p>
+      </div>
+
       <div v-if="canGroupSelected || selectedGroup" class="image-editor-panel">
         <div class="panel-title">{{ selectedGroup ? 'Group' : 'Selection' }}</div>
 
@@ -2883,6 +3362,42 @@ function updateTransform(e, id) {
 
         <div class="layer-readout">
           Layer {{ selectedLayerIndex + 1 }} of {{ canvasItems.length }}
+        </div>
+      </div>
+
+      <div v-if="selectedItem && selectedElementDimensions" class="image-editor-panel dimension-panel">
+        <div class="panel-title">Dimensions</div>
+
+        <div class="dimension-readout">
+          <span>Pixels</span>
+          <strong>{{ selectedElementDimensions.px }}</strong>
+          <span>Centimeters</span>
+          <strong>{{ selectedElementDimensions.cm }}</strong>
+          <span>Inches</span>
+          <strong>{{ selectedElementDimensions.in }}</strong>
+        </div>
+
+        <div v-if="canEditElementDimensions(selectedItem)" class="dimension-input-grid">
+          <label>
+            <span>Width (px)</span>
+            <input
+                :value="getEditableElementDimensionValue(selectedItem, 'width')"
+                type="number"
+                min="1"
+                step="1"
+                @input="setEditableElementDimension(selectedItem, 'width', $event.target.value)"
+            >
+          </label>
+          <label>
+            <span>Height (px)</span>
+            <input
+                :value="getEditableElementDimensionValue(selectedItem, 'height')"
+                type="number"
+                min="1"
+                step="1"
+                @input="setEditableElementDimension(selectedItem, 'height', $event.target.value)"
+            >
+          </label>
         </div>
       </div>
 
@@ -3150,11 +3665,21 @@ function updateTransform(e, id) {
         </div>
 
         <label class="control-row">
-          <span>Data</span>
+          <span>X Values</span>
           <textarea
-              v-model="selectedChart.chartData"
+              v-model="selectedChart.xAxisValues"
               class="chart-data-input"
-              rows="3"
+              rows="2"
+              placeholder="0, 1, 2, 3"
+          />
+        </label>
+
+        <label class="control-row">
+          <span>Y Values</span>
+          <textarea
+              v-model="selectedChart.yAxisValues"
+              class="chart-data-input"
+              rows="2"
               placeholder="12, 48, 32, 76"
           />
         </label>
@@ -3282,6 +3807,11 @@ function updateTransform(e, id) {
                         v-for="line in getChartGridLines(child)"
                         :key="line.id"
                         :config="getChartGridLineConfig(child, line)"
+                    />
+                    <v-text
+                        v-for="label in getChartAxisValueLabelConfigs(child)"
+                        :key="label.id"
+                        :config="label"
                     />
                     <v-line
                         v-if="child.chartType === 'polygon'"
@@ -3426,6 +3956,11 @@ function updateTransform(e, id) {
                     v-for="line in getChartGridLines(item)"
                     :key="line.id"
                     :config="getChartGridLineConfig(item, line)"
+                />
+                <v-text
+                    v-for="label in getChartAxisValueLabelConfigs(item)"
+                    :key="label.id"
+                    :config="label"
                 />
                 <v-line
                     v-if="item.chartType === 'polygon'"
@@ -3929,6 +4464,115 @@ function updateTransform(e, id) {
 }
 
 .layer-readout {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dimension-panel {
+  gap: 8px;
+}
+
+.dimension-readout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dimension-readout strong {
+  margin-bottom: 4px;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.dimension-input-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.dimension-input-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #334155;
+  font-size: 11px;
+}
+
+.dimension-input-grid input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 5px;
+}
+
+.layer-list-panel {
+  gap: 8px;
+}
+
+.layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.layer-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  cursor: grab;
+  user-select: none;
+}
+
+.layer-list-item:hover,
+.layer-list-item:focus-visible {
+  border-color: #94a3b8;
+  outline: none;
+}
+
+.layer-list-item.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.layer-list-item.dragging {
+  opacity: 0.55;
+}
+
+.layer-list-item.drag-over {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 1px #2563eb;
+}
+
+.layer-list-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-list-meta {
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.empty-layer-list {
+  margin: 0;
   color: #64748b;
   font-size: 12px;
   line-height: 1.35;
