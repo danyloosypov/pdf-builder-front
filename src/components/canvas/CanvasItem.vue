@@ -98,6 +98,7 @@ const emit = defineEmits([
           v-else-if="child.type === 'chart'"
           :config="getGroupedChartBoxConfig(child)"
       >
+        <v-rect :config="getGroupedChildConfig(getChartHitAreaConfig(child))" />
         <v-text
             v-if="child.chartTitle"
             :config="getChartTitleConfig(child)"

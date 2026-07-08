@@ -35,6 +35,12 @@
   cursor: not-allowed;
 }
 
+.export-layout-button {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
 .file-upload-button {
   display: inline-flex;
   align-items: center;
@@ -91,6 +97,18 @@
   color: #b91c1c;
   font-size: 12px;
   line-height: 1.35;
+}
+
+.field-success {
+  margin: 0;
+  color: #166534;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.import-layout-button.is-disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 .page-size-panel {

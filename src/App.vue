@@ -220,6 +220,34 @@ export default {
       <button @click="addLabel">Label</button>
       <button @click="addTable">Table</button>
       <button
+          class="export-layout-button"
+          type="button"
+          @click="exportLayoutWithImagesAsJson"
+      >
+        Export With Images
+      </button>
+      <button
+          class="export-layout-button"
+          type="button"
+          @click="exportLayoutWithImageUrlsAsJson"
+      >
+        Save Image URL Layout
+      </button>
+      <label
+          class="file-upload-button import-layout-button"
+          :class="{ 'is-disabled': isImportingLayout }"
+      >
+        {{ isImportingLayout ? 'Importing...' : 'Import JSON' }}
+        <input
+            type="file"
+            accept="application/json,.json"
+            :disabled="isImportingLayout"
+            @change="importLayoutFile"
+        >
+      </label>
+      <p v-if="layoutImportError" class="field-error">{{ layoutImportError }}</p>
+      <p v-if="layoutImportMessage" class="field-success">{{ layoutImportMessage }}</p>
+      <button
           class="clear-canvas-button"
           type="button"
           :disabled="!hasCanvasElements"

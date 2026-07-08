@@ -202,6 +202,9 @@ const qrLink = ref('')
 const qrError = ref('')
 const barcodeValue = ref('')
 const barcodeError = ref('')
+const isImportingLayout = ref(false)
+const layoutImportError = ref('')
+const layoutImportMessage = ref('')
 const richRenderVersions = new Map()
 let canvasVersion = 0
 const defaultImageSettings = {
@@ -251,6 +254,7 @@ const defaultChartSettings = {
   yAxisValues: '12, 48, 32, 76, 54, 92, 68',
   stroke: '#2563eb',
   fill: '#93c5fd',
+  backgroundColor: '#ffffff',
   fillOpacity: 0.35,
   strokeWidth: 3,
   pointRadius: 4,
@@ -280,12 +284,12 @@ const RichTextStyle = Mark.create({
     return {
       color: {
         default: null,
-        parseHTML: element => element.style.color || null,
+        parseHTML: element => getHexColor(element.style.color, null),
         renderHTML: () => ({})
       },
       backgroundColor: {
         default: null,
-        parseHTML: element => element.style.backgroundColor || null,
+        parseHTML: element => getHexColor(element.style.backgroundColor, null),
         renderHTML: () => ({})
       },
       fontFamily: {
@@ -1339,6 +1343,19 @@ function getHexColor(value, fallback) {
     return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
   }
 
+  const rgbMatch = color.match(/^rgba?\(([^)]+)\)$/)
+
+  if (rgbMatch) {
+    const channels = rgbMatch[1]
+      .split(',')
+      .slice(0, 3)
+      .map(channel => Math.round(clampNumber(Number.parseFloat(channel), 0, 255)))
+
+    if (channels.length === 3 && channels.every(Number.isFinite)) {
+      return `#${channels.map(channel => channel.toString(16).padStart(2, '0')).join('')}`
+    }
+  }
+
   return namedColors[color] || fallback
 }
 
@@ -1899,7 +1916,7 @@ function getChartHitAreaConfig(item) {
     y: 0,
     width: item.width,
     height: item.height,
-    fill: 'rgba(0,0,0,0)'
+    fill: item.backgroundColor || defaultChartSettings.backgroundColor
   }
 }
 
@@ -2734,12 +2751,46 @@ function syncEditorContent() {
 
   if (editingTextTarget.value === 'shape') {
     item.shapeRichText = editor.value.getHTML()
+    item.shapeRichTextJson = editor.value.getJSON()
     item.shapeText = editor.value.getText({ blockSeparator: '\n' })
     return
   }
 
   item.richText = editor.value.getHTML()
+  item.richTextJson = editor.value.getJSON()
   item.text = editor.value.getText({ blockSeparator: '\n' })
+}
+
+function getStoredRichTextEditorContent(item, htmlKey, jsonKey, fallbackHtml) {
+  return item?.[jsonKey] || item?.[htmlKey] || fallbackHtml
+}
+
+function getHtmlFromRichTextJson(content) {
+  if (!content || !editor.value) return ''
+
+  const previousContent = editor.value.getJSON()
+
+  editor.value.commands.setContent(content, { emitUpdate: false })
+
+  const html = editor.value.getHTML()
+
+  editor.value.commands.setContent(previousContent, { emitUpdate: false })
+
+  return html
+}
+
+function getStoredRichTextHtml(item, htmlKey, jsonKey, fallbackHtml = '') {
+  if (typeof item?.[htmlKey] === 'string' && item[htmlKey]) return item[htmlKey]
+
+  const jsonHtml = getHtmlFromRichTextJson(item?.[jsonKey])
+
+  return jsonHtml || fallbackHtml
+}
+
+function syncActiveTextEditForLayoutExport() {
+  if (!editingItem.value || !editor.value) return
+
+  syncEditorContent()
 }
 
 function startTextEditing(item) {
@@ -2764,7 +2815,12 @@ function startTextEditing(item) {
   transformerRef.value?.getNode()?.nodes([])
 
   const plainTextContent = escapeHtml(item.text || '').replaceAll('\n', '<br>')
-  const content = item.richText || `<p>${plainTextContent}</p>`
+  const content = getStoredRichTextEditorContent(
+    item,
+    'richText',
+    'richTextJson',
+    `<p>${plainTextContent}</p>`
+  )
   editor.value.commands.setContent(content, { emitUpdate: false })
 
   nextTick(() => editor.value?.commands.focus('end'))
@@ -2791,7 +2847,12 @@ function startShapeTextEditing(item) {
   transformerRef.value?.getNode()?.nodes([])
 
   const plainTextContent = escapeHtml(item.shapeText || 'Text').replaceAll('\n', '<br>')
-  const content = item.shapeRichText || `<p>${plainTextContent}</p>`
+  const content = getStoredRichTextEditorContent(
+    item,
+    'shapeRichText',
+    'shapeRichTextJson',
+    `<p>${plainTextContent}</p>`
+  )
   editor.value.commands.setContent(content, { emitUpdate: false })
 
   nextTick(() => editor.value?.commands.focus('end'))
@@ -2857,6 +2918,67 @@ function renderShapeRichText(item, html, width, height) {
   })
 }
 
+function getElementTextDecorationLines(element) {
+  const tagName = element.tagName?.toLowerCase()
+  const decorationValue = `${element.style.textDecoration || ''} ${element.style.textDecorationLine || ''}`
+  const lines = []
+
+  if (tagName === 'u' || decorationValue.includes('underline')) lines.push('underline')
+  if (['s', 'strike', 'del'].includes(tagName) || decorationValue.includes('line-through')) {
+    lines.push('line-through')
+  }
+
+  return [...new Set(lines)]
+}
+
+function setTextDecorationLines(element, lines) {
+  const currentLines = getElementTextDecorationLines(element)
+  const nextLines = [...new Set([...currentLines, ...lines])]
+
+  element.style.textDecorationLine = nextLines.join(' ')
+  element.style.textDecorationColor = 'currentColor'
+}
+
+function wrapTextNodeWithDecoration(textNode, lines) {
+  const span = document.createElement('span')
+
+  span.style.textDecorationLine = lines.join(' ')
+  span.style.textDecorationColor = 'currentColor'
+  textNode.parentNode?.insertBefore(span, textNode)
+  span.append(textNode)
+}
+
+function applyTextDecorationToTextNodes(node, lines) {
+  Array.from(node.childNodes).forEach(child => {
+    if (child.nodeType === Node.TEXT_NODE) {
+      if (child.textContent) wrapTextNodeWithDecoration(child, lines)
+      return
+    }
+
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      applyTextDecorationToTextNodes(child, lines)
+    }
+  })
+}
+
+function normalizeRichTextDecorationColors(html) {
+  const template = document.createElement('template')
+
+  template.innerHTML = html
+
+  Array.from(template.content.querySelectorAll('u, s, strike, del, [style]')).forEach(element => {
+    const lines = getElementTextDecorationLines(element)
+
+    if (!lines.length) return
+
+    applyTextDecorationToTextNodes(element, lines)
+    element.style.textDecoration = 'none'
+    element.style.textDecorationLine = 'none'
+  })
+
+  return template.innerHTML
+}
+
 function renderRichText(item, html, width, height, options = {}) {
   const imageKey = options.imageKey || 'richImage'
   const renderKey = options.renderKey || item.id
@@ -2903,7 +3025,7 @@ function renderRichText(item, html, width, height, options = {}) {
     pre { margin: 0.25em 0; padding: 0.4em; background: #f1f1f1; white-space: pre-wrap; }
   `
 
-  content.innerHTML = html
+  content.innerHTML = normalizeRichTextDecorationColors(html)
   wrapper.append(style, content)
   foreignObject.append(wrapper)
   svg.append(foreignObject)
@@ -3017,6 +3139,411 @@ function updateTransform(e, id) {
   removeElementIfOutsideCanvas(node, id)
 }
 
+const runtimeLayoutKeys = new Set([
+  'image',
+  'richImage',
+  'shapeRichImage',
+  'imageDataUrl',
+  'imageSource'
+])
+const DEFAULT_EXPORTED_IMAGE_URL = ''
+
+function getSerializableLayoutValue(value) {
+  if (Array.isArray(value)) return value.map(getSerializableLayoutValue)
+
+  if (value && typeof value === 'object') {
+    const output = {}
+
+    Object.entries(value).forEach(([key, entry]) => {
+      if (runtimeLayoutKeys.has(key) || typeof entry === 'function') return
+
+      output[key] = getSerializableLayoutValue(entry)
+    })
+
+    return output
+  }
+
+  return value
+}
+
+async function waitForExportImage(image) {
+  if (!image) return false
+  if (image.complete && (image.naturalWidth || image.width)) return true
+
+  if (typeof image.decode === 'function') {
+    try {
+      await image.decode()
+      return Boolean(image.naturalWidth || image.width)
+    } catch {
+      return false
+    }
+  }
+
+  return false
+}
+
+async function getImageDataUrlForExport(item) {
+  const image = item?.image
+  const imageSource = image?.src || ''
+
+  if (imageSource.startsWith('data:')) return imageSource
+  if (!await waitForExportImage(image)) return null
+
+  try {
+    const width = image.naturalWidth || image.width
+    const height = image.naturalHeight || image.height
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+
+    if (!width || !height || !context) return null
+
+    canvas.width = width
+    canvas.height = height
+    context.drawImage(image, 0, 0, width, height)
+
+    return canvas.toDataURL('image/png')
+  } catch {
+    return null
+  }
+}
+
+function getImageUrlForExport(item) {
+  return item?.imageUrl || item?.sourceUrl || item?.url || DEFAULT_EXPORTED_IMAGE_URL
+}
+
+async function serializeLayoutElement(item, options = {}) {
+  const serializedItem = getSerializableLayoutValue(item)
+
+  if (Array.isArray(item?.children)) {
+    serializedItem.children = await Promise.all(
+      item.children.map(child => serializeLayoutElement(child, options))
+    )
+  }
+
+  if (item?.type === 'image' && options.imageMode === 'base64') {
+    serializedItem.imageDataUrl = await getImageDataUrlForExport(item)
+  }
+
+  if (item?.type === 'image' && options.imageMode === 'url') {
+    serializedItem.imageUrl = getImageUrlForExport(item)
+  }
+
+  return serializedItem
+}
+
+async function createLayoutExportData(options = {}) {
+  syncActiveTextEditForLayoutExport()
+
+  return {
+    version: 1,
+    imageMode: options.imageMode || 'url',
+    exportedAt: new Date().toISOString(),
+    page: {
+      preset: selectedPagePreset.value,
+      unit: pageUnit.value,
+      orientation: pageOrientation.value,
+      canvasColor: canvasColor.value,
+      sizeInches: { ...pageSizeInches.value },
+      sizePixels: { ...pagePixelSize.value },
+      customSizeInches: { ...customPageSizeInches.value },
+      marginPreset: selectedPageMarginPreset.value,
+      marginsInches: { ...pageMarginsInches.value },
+      customMarginsInches: { ...customPageMarginsInches.value }
+    },
+    elements: await Promise.all(
+      elements.value.map(item => serializeLayoutElement(item, options))
+    )
+  }
+}
+
+function getLayoutExportFileName(variant = 'layout') {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/\.\d{3}Z$/, '')
+    .replaceAll(':', '-')
+
+  return `pdf-builder-${variant}-${timestamp}.json`
+}
+
+function downloadJsonFile(data, fileName) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: 'application/json;charset=utf-8'
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = fileName
+  document.body.append(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function exportLayoutAsJson() {
+  const data = await createLayoutExportData({ imageMode: 'url' })
+
+  downloadJsonFile(data, getLayoutExportFileName('layout'))
+}
+
+async function exportLayoutWithImagesAsJson() {
+  const data = await createLayoutExportData({ imageMode: 'base64' })
+
+  downloadJsonFile(data, getLayoutExportFileName('with-images'))
+}
+
+async function exportLayoutWithImageUrlsAsJson() {
+  const data = await createLayoutExportData({ imageMode: 'url' })
+
+  downloadJsonFile(data, getLayoutExportFileName('image-urls'))
+}
+
+function isJsonLayoutFile(file) {
+  return file?.type === 'application/json' ||
+    /\.json$/i.test(file?.name || '')
+}
+
+function getImportLayoutElements(data) {
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.elements)) return data.elements
+
+  return null
+}
+
+function getImportedImageSource(item) {
+  return [
+    item?.imageDataUrl,
+    item?.imageUrl,
+    item?.imageSource
+  ].find(value => typeof value === 'string' && value.trim())?.trim() || ''
+}
+
+function loadImageFromSource(source, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (!source) {
+      resolve(null)
+      return
+    }
+
+    const image = new window.Image()
+
+    if (options.crossOrigin && !source.startsWith('data:')) {
+      image.crossOrigin = options.crossOrigin
+    }
+
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Could not load image.'))
+    image.src = source
+  })
+}
+
+async function loadImportedImage(source, stats) {
+  if (!source) return null
+
+  try {
+    return await loadImageFromSource(source, { crossOrigin: 'anonymous' })
+  } catch {
+    try {
+      return await loadImageFromSource(source)
+    } catch {
+      stats.failedImages += 1
+      return null
+    }
+  }
+}
+
+function getImportElementConfig(item) {
+  const config = getSerializableLayoutValue(item)
+
+  delete config.children
+
+  return config
+}
+
+function createImportedElementFromConfig(config) {
+  switch (config.type) {
+    case 'text':
+      return new TextElement(config)
+    case 'image':
+      return new ImageElement(config)
+    case 'rect':
+      return new RectElement(config)
+    case 'circle':
+      return new CircleElement(config)
+    case 'polygon':
+    case 'triangle':
+      return new RegularPolygonElement(config)
+    case 'line':
+      return new LineElement(config)
+    case 'arrow':
+      return new ArrowElement(config)
+    case 'label':
+      return new LabelElement(config)
+    case 'chart':
+      return new ChartElement(config)
+    case 'group':
+      return new GroupElement(config)
+    default:
+      return null
+  }
+}
+
+function ensureImportedElementSettings(item) {
+  ensureSelectableItemSettings(item)
+
+  if (Array.isArray(item?.children)) {
+    item.children.forEach(ensureImportedElementSettings)
+  }
+}
+
+async function createImportedElement(item, stats) {
+  if (!item || typeof item !== 'object' || !item.type) return null
+
+  const config = getImportElementConfig(item)
+
+  if (Array.isArray(item.children)) {
+    const children = await Promise.all(
+      item.children.map(child => createImportedElement(child, stats))
+    )
+
+    config.children = children.filter(Boolean)
+  }
+
+  if (item.type === 'image') {
+    const imageSource = getImportedImageSource(item)
+
+    config.imageUrl = typeof item.imageUrl === 'string' ? item.imageUrl : config.imageUrl
+    config.image = await loadImportedImage(imageSource, stats)
+  }
+
+  const importedElement = createImportedElementFromConfig(config)
+
+  if (!importedElement) return null
+
+  ensureImportedElementSettings(importedElement)
+
+  return importedElement
+}
+
+function applyImportedPageSettings(page) {
+  if (!page || typeof page !== 'object') return
+
+  if (['cm', 'in'].includes(page.unit)) pageUnit.value = page.unit
+  if (['portrait', 'landscape'].includes(page.orientation)) pageOrientation.value = page.orientation
+  if (/^#[\da-f]{6}$/i.test(page.canvasColor || '')) canvasColor.value = page.canvasColor
+  if (pageSizePresets.some(preset => preset.value === page.preset)) selectedPagePreset.value = page.preset
+  if (pageMarginPresets.some(preset => preset.value === page.marginPreset)) selectedPageMarginPreset.value = page.marginPreset
+
+  if (page.customSizeInches && typeof page.customSizeInches === 'object') {
+    const width = Number(page.customSizeInches.width)
+    const height = Number(page.customSizeInches.height)
+
+    customPageSizeInches.value = {
+      width: Number.isFinite(width) ? clampNumber(width, MIN_PAGE_INCHES, MAX_PAGE_INCHES) : customPageSizeInches.value.width,
+      height: Number.isFinite(height) ? clampNumber(height, MIN_PAGE_INCHES, MAX_PAGE_INCHES) : customPageSizeInches.value.height
+    }
+  }
+
+  if (page.customMarginsInches && typeof page.customMarginsInches === 'object') {
+    customPageMarginsInches.value = getClampedPageMargins({
+      ...customPageMarginsInches.value,
+      ...page.customMarginsInches
+    })
+  }
+}
+
+function renderImportedRichTextImages(item) {
+  if (!item || typeof item !== 'object') return
+
+  if (item.type === 'text') {
+    const html = getStoredRichTextHtml(item, 'richText', 'richTextJson')
+
+    if (html) {
+      item.richText = html
+      renderRichText(item, html, item.width || 240, item.height || Math.ceil((item.fontSize || 20) * 1.5))
+    }
+  }
+
+  if (canShapeHaveRichText(item)) {
+    const html = getStoredRichTextHtml(item, 'shapeRichText', 'shapeRichTextJson')
+
+    if (html) {
+      const defaultSize = getDefaultShapeTextSize(item)
+
+      item.shapeRichText = html
+      ensureShapeTextSettings(item)
+      renderShapeRichText(
+        item,
+        html,
+        item.shapeTextWidth || defaultSize.width,
+        item.shapeTextHeight || defaultSize.height
+      )
+    }
+  }
+
+  if (Array.isArray(item.children)) {
+    item.children.forEach(renderImportedRichTextImages)
+  }
+}
+
+async function importLayoutData(data) {
+  const layoutElements = getImportLayoutElements(data)
+
+  if (!layoutElements) {
+    throw new Error('Choose a valid layout JSON file.')
+  }
+
+  const stats = { failedImages: 0 }
+  const importedElements = await Promise.all(
+    layoutElements.map(item => createImportedElement(item, stats))
+  )
+  const nextElements = importedElements.filter(Boolean)
+
+  applyImportedPageSettings(data?.page)
+  clearCanvas()
+  elements.value = nextElements
+  await nextTick()
+  elements.value.forEach(renderImportedRichTextImages)
+
+  return {
+    elementCount: nextElements.length,
+    failedImages: stats.failedImages
+  }
+}
+
+async function importLayoutFile(event) {
+  const input = event.target
+  const file = input.files?.[0]
+
+  layoutImportError.value = ''
+  layoutImportMessage.value = ''
+
+  if (!file) return
+
+  if (!isJsonLayoutFile(file)) {
+    layoutImportError.value = 'Choose a JSON layout file.'
+    input.value = ''
+    return
+  }
+
+  isImportingLayout.value = true
+
+  try {
+    const data = JSON.parse(await file.text())
+    const result = await importLayoutData(data)
+    const imageWarning = result.failedImages
+      ? ` ${result.failedImages} image${result.failedImages === 1 ? '' : 's'} could not be loaded.`
+      : ''
+
+    layoutImportMessage.value = `Imported ${result.elementCount} element${result.elementCount === 1 ? '' : 's'}.${imageWarning}`
+  } catch (error) {
+    layoutImportError.value = error?.message || 'Could not import this layout.'
+  } finally {
+    isImportingLayout.value = false
+    input.value = ''
+  }
+}
+
   return {
     elements,
     PX_PER_INCH,
@@ -3072,6 +3599,9 @@ function updateTransform(e, id) {
     qrError,
     barcodeValue,
     barcodeError,
+    isImportingLayout,
+    layoutImportError,
+    layoutImportMessage,
     richRenderVersions,
     canvasVersion,
     defaultImageSettings,
@@ -3309,14 +3839,49 @@ function updateTransform(e, id) {
     isTransformerTarget,
     escapeHtml,
     syncEditorContent,
+    getStoredRichTextEditorContent,
+    getHtmlFromRichTextJson,
+    getStoredRichTextHtml,
+    syncActiveTextEditForLayoutExport,
     startTextEditing,
     startShapeTextEditing,
     handleStagePointerDown,
     finishTextEditing,
     renderShapeRichText,
+    getElementTextDecorationLines,
+    setTextDecorationLines,
+    wrapTextNodeWithDecoration,
+    applyTextDecorationToTextNodes,
+    normalizeRichTextDecorationColors,
     renderRichText,
     updatePosition,
     updatePositionDuringDrag,
-    updateTransform
+    updateTransform,
+    runtimeLayoutKeys,
+    DEFAULT_EXPORTED_IMAGE_URL,
+    getSerializableLayoutValue,
+    waitForExportImage,
+    getImageDataUrlForExport,
+    getImageUrlForExport,
+    serializeLayoutElement,
+    createLayoutExportData,
+    getLayoutExportFileName,
+    downloadJsonFile,
+    exportLayoutAsJson,
+    exportLayoutWithImagesAsJson,
+    exportLayoutWithImageUrlsAsJson,
+    isJsonLayoutFile,
+    getImportLayoutElements,
+    getImportedImageSource,
+    loadImageFromSource,
+    loadImportedImage,
+    getImportElementConfig,
+    createImportedElementFromConfig,
+    ensureImportedElementSettings,
+    createImportedElement,
+    applyImportedPageSettings,
+    renderImportedRichTextImages,
+    importLayoutData,
+    importLayoutFile
   }
 }
