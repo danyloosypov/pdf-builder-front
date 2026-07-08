@@ -200,9 +200,10 @@ const defaultImageSettings = {
   cropTop: 0,
   cropBottom: 0
 }
-const shapeTypes = ['rect', 'circle', 'polygon', 'line']
-const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'line', 'arrow']
-const fillableShapeTypes = ['rect', 'circle', 'polygon']
+const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'line']
+const regularPolygonShapeTypes = ['polygon', 'triangle']
+const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'line', 'arrow']
+const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle']
 const cornerRadiusFields = [
   { label: 'Top left', index: 0 },
   { label: 'Top right', index: 1 },
@@ -213,6 +214,7 @@ const shapeLabels = {
   rect: 'Rectangle',
   circle: 'Circle',
   polygon: 'Polygon',
+  triangle: 'Triangle',
   line: 'Line'
 }
 const defaultShapeSettings = {
@@ -223,7 +225,8 @@ const defaultShapeSettings = {
 const defaultShapeFills = {
   rect: '#dddddd',
   circle: '#87ceeb',
-  polygon: '#f1c40f'
+  polygon: '#f1c40f',
+  triangle: '#f59e0b'
 }
 const defaultChartSettings = {
   chartType: 'line',
@@ -411,6 +414,7 @@ const lineItems = computed(() => elements.value.filter(i => i.type === 'line'))
 const arrowItems = computed(() => elements.value.filter(i => i.type === 'arrow'))
 const labelItems = computed(() => elements.value.filter(i => i.type === 'label'))
 const polygonItems = computed(() => elements.value.filter(i => i.type === 'polygon'))
+const triangleItems = computed(() => elements.value.filter(i => i.type === 'triangle'))
 const chartItems = computed(() => elements.value.filter(i => i.type === 'chart'))
 const shapeTextItems = computed(() => elements.value.filter(i => shapeTypes.includes(i.type) && i.shapeRichImage))
 const canvasItems = computed(() => elements.value.filter(item => !item.tableGroup))
@@ -439,6 +443,7 @@ const canMoveSelectedForward = computed(() => (
   selectedLayerIndex.value >= 0 && selectedLayerIndex.value < canvasItems.value.length - 1
 ))
 const selectedElementDimensions = computed(() => getElementDimensionReadout(selectedItem.value))
+const canAlignSelected = computed(() => selectedItems.value.length > 1)
 const canGroupSelected = computed(() => (
   selectedItems.value.length > 1 &&
   selectedItems.value.every(item => item.type !== 'group')
@@ -747,30 +752,6 @@ function addText() {
   })
 }
 
-function addImage() {
-  const img = new window.Image()
-  const targetCanvasVersion = canvasVersion
-
-  img.crossOrigin = 'anonymous'
-  img.src = 'https://konvajs.org/assets/yoda.jpg'
-
-  img.onload = () => {
-    if (targetCanvasVersion !== canvasVersion) return
-
-    elements.value.push({
-      id: Date.now(),
-      type: 'image',
-      image: img,
-      x: 200,
-      y: 200,
-      width: 150,
-      height: 150,
-      ...defaultImageSettings,
-      draggable: true
-    })
-  }
-}
-
 function isImageFile(file) {
   return file?.type?.startsWith('image/') ||
       /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file?.name || '')
@@ -906,6 +887,22 @@ function addCircle() {
     y: 250,
     radius: 40,
     fill: '#87ceeb',
+    stroke: '#111827',
+    strokeWidth: 2,
+    opacity: 1,
+    draggable: true
+  })
+}
+
+function addTriangle() {
+  elements.value.push({
+    id: Date.now(),
+    type: 'triangle',
+    x: 300,
+    y: 300,
+    sides: 3,
+    radius: 55,
+    fill: '#f59e0b',
     stroke: '#111827',
     strokeWidth: 2,
     opacity: 1,
@@ -1185,6 +1182,39 @@ function getSelectedItemsBounds(items) {
   }
 }
 
+function getSelectedItemRects(items) {
+  return items
+    .map(item => {
+      const rect = nodeRefs.value[item.id]?.getClientRect()
+
+      return rect ? { item, rect } : null
+    })
+    .filter(Boolean)
+}
+
+function getRectsBounds(rects) {
+  if (!rects.length) return null
+
+  const x = Math.min(...rects.map(({ rect }) => rect.x))
+  const y = Math.min(...rects.map(({ rect }) => rect.y))
+  const right = Math.max(...rects.map(({ rect }) => rect.x + rect.width))
+  const bottom = Math.max(...rects.map(({ rect }) => rect.y + rect.height))
+
+  return {
+    x,
+    y,
+    right,
+    bottom,
+    centerX: x + (right - x) / 2,
+    centerY: y + (bottom - y) / 2
+  }
+}
+
+function moveCanvasItemByDelta(item, dx, dy) {
+  item.x = getItemCoordinate(item, 'x') + dx
+  item.y = getItemCoordinate(item, 'y') + dy
+}
+
 function getGroupedCanvasItem(item, groupX, groupY) {
   const child = cloneCanvasItem(item)
 
@@ -1433,7 +1463,7 @@ function ensureShapeSettings(item) {
 }
 
 function canShapeHaveRichText(item) {
-  return item && ['rect', 'circle', 'polygon', 'line'].includes(item.type)
+  return item && ['rect', 'circle', 'polygon', 'triangle', 'line'].includes(item.type)
 }
 
 function getEditingTextBaseFontSize(item = editingItem.value) {
@@ -1537,7 +1567,7 @@ function getFallbackElementPixelDimensions(item) {
     }
   }
 
-  if (item.type === 'circle' || item.type === 'polygon') {
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     const diameter = Math.max(0, (Number(item.radius) || 0) * 2)
 
     return {
@@ -1631,7 +1661,7 @@ function getEditableElementDimensions(item) {
     }
   }
 
-  if (item.type === 'circle' || item.type === 'polygon') {
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     const diameter = Math.max(1, (Number(item.radius) || 0) * 2)
 
     return {
@@ -1703,7 +1733,7 @@ function setEditableElementDimension(item, dimension, value) {
 
   if (item.type === 'image' || item.type === 'rect') {
     item[dimension] = targetValue
-  } else if (item.type === 'circle' || item.type === 'polygon') {
+  } else if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     item.radius = targetValue / 2
   } else if (item.type === 'line' || item.type === 'arrow') {
     resizeLineElementDimension(item, dimension, targetValue)
@@ -1725,7 +1755,7 @@ function getShapeTextCenter(item) {
     )
   }
 
-  if (item.type === 'circle' || item.type === 'polygon') {
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     return {
       x: item.x || 0,
       y: item.y || 0
@@ -1751,7 +1781,7 @@ function getDefaultShapeTextSize(item) {
     }
   }
 
-  if (item.type === 'circle' || item.type === 'polygon') {
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     const radius = item.radius || 50
 
     return {
@@ -2375,6 +2405,7 @@ function getLayerItemTitle(item) {
   if (item.type === 'rect') return `Rectangle${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'circle') return `Circle${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'polygon') return `Polygon${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'triangle') return `Triangle${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'line') return `Line${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'arrow') return 'Arrow'
   if (item.type === 'label') return `Label${getLayerTitleSuffix(item.text)}`
@@ -2444,6 +2475,39 @@ function moveSelectedLayerToBack() {
 
 function moveSelectedLayerToFront() {
   reorderSelectedLayer(canvasItems.value.length - 1)
+}
+
+function alignSelectedElements(axis, alignment) {
+  if (!canAlignSelected.value) return
+
+  if (editingId.value) finishTextEditing()
+
+  const rectEntries = getSelectedItemRects(selectedItems.value)
+  if (rectEntries.length !== selectedItems.value.length) return
+
+  const bounds = getRectsBounds(rectEntries)
+  if (!bounds) return
+
+  rectEntries.forEach(({ item, rect }) => {
+    let dx = 0
+    let dy = 0
+
+    if (axis === 'x') {
+      if (alignment === 'start') dx = bounds.x - rect.x
+      if (alignment === 'center') dx = bounds.centerX - (rect.x + rect.width / 2)
+      if (alignment === 'end') dx = bounds.right - (rect.x + rect.width)
+    }
+
+    if (axis === 'y') {
+      if (alignment === 'start') dy = bounds.y - rect.y
+      if (alignment === 'center') dy = bounds.centerY - (rect.y + rect.height / 2)
+      if (alignment === 'end') dy = bounds.bottom - (rect.y + rect.height)
+    }
+
+    moveCanvasItemByDelta(item, dx, dy)
+  })
+
+  updateTransformerSelection()
 }
 
 function ensureSelectableItemSettings(item) {
@@ -3031,7 +3095,7 @@ function updateTransform(e, id) {
     node.scaleY(1)
   }
 
-  if (el.type === 'polygon') {
+  if (regularPolygonShapeTypes.includes(el.type)) {
     el.radius = Math.max(1, node.radius() * Math.abs(node.scaleX()))
     node.radius(el.radius)
     node.scaleX(1)
@@ -3195,7 +3259,6 @@ function updateTransform(e, id) {
       </div>
 
       <button @click="addText">Text</button>
-      <button @click="addImage">Image</button>
       <label class="file-upload-button">
         Upload Image
         <input type="file" accept="image/*" @change="uploadImage">
@@ -3246,6 +3309,7 @@ function updateTransform(e, id) {
       </div>
       <button @click="addRect">Rect</button>
       <button @click="addCircle">Circle</button>
+      <button @click="addTriangle">Triangle</button>
       <button @click="addPolygon">Polygon</button>
       <button @click="addChart">Graph</button>
       <button @click="addLine">Line</button>
@@ -3301,10 +3365,10 @@ function updateTransform(e, id) {
         <p v-else class="empty-layer-list">No elements yet</p>
       </div>
 
-      <div v-if="canGroupSelected || selectedGroup" class="image-editor-panel">
+      <div v-if="canAlignSelected || selectedGroup" class="image-editor-panel">
         <div class="panel-title">{{ selectedGroup ? 'Group' : 'Selection' }}</div>
 
-        <div class="selection-button-grid">
+        <div v-if="canGroupSelected || selectedGroup" class="selection-button-grid">
           <button
               v-if="canGroupSelected"
               type="button"
@@ -3319,6 +3383,22 @@ function updateTransform(e, id) {
           >
             Ungroup
           </button>
+        </div>
+
+        <div v-if="canAlignSelected" class="alignment-controls">
+          <span>Horizontal</span>
+          <div class="alignment-button-grid">
+            <button type="button" @click="alignSelectedElements('x', 'start')">Left</button>
+            <button type="button" @click="alignSelectedElements('x', 'center')">Center</button>
+            <button type="button" @click="alignSelectedElements('x', 'end')">Right</button>
+          </div>
+
+          <span>Vertical</span>
+          <div class="alignment-button-grid">
+            <button type="button" @click="alignSelectedElements('y', 'start')">Top</button>
+            <button type="button" @click="alignSelectedElements('y', 'center')">Middle</button>
+            <button type="button" @click="alignSelectedElements('y', 'end')">Bottom</button>
+          </div>
         </div>
 
         <div class="layer-readout">
@@ -3782,7 +3862,7 @@ function updateTransform(e, id) {
                   />
 
                   <v-regular-polygon
-                      v-else-if="child.type === 'polygon'"
+                      v-else-if="regularPolygonShapeTypes.includes(child.type)"
                       :config="getGroupedChildConfig(child)"
                   />
 
@@ -3916,7 +3996,7 @@ function updateTransform(e, id) {
               />
 
               <v-regular-polygon
-                  v-else-if="item.type === 'polygon'"
+                  v-else-if="regularPolygonShapeTypes.includes(item.type)"
                   :ref="el => setRef(el, item.id)"
                   :config="item"
                   @mousedown="handleSelectablePointerDown($event, item.id)"
@@ -4452,6 +4532,29 @@ function updateTransform(e, id) {
 
 .selection-button-grid button {
   min-height: 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.alignment-controls {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.alignment-button-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.alignment-button-grid button {
+  min-height: 28px;
+  min-width: 0;
+  padding: 2px 4px;
   border: 1px solid #cbd5e1;
   border-radius: 4px;
   background: #f8fafc;
