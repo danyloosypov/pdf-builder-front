@@ -425,6 +425,28 @@ export default {
         <div class="panel-title">Label Settings</div>
 
         <label class="control-row">
+          <span>Text</span>
+          <input
+              v-model="selectedLabel.text"
+              class="chart-text-input"
+              type="text"
+          >
+        </label>
+
+        <label class="control-row">
+          <span>Font</span>
+          <select v-model="selectedLabel.textConfig.fontFamily" class="control-select">
+            <option
+                v-for="font in fontOptions"
+                :key="font.value"
+                :value="font.value"
+            >
+              {{ font.label }}
+            </option>
+          </select>
+        </label>
+
+        <label class="control-row">
           <span>Font Size</span>
           <input
               :value="selectedLabel.textConfig.fontSize"
@@ -443,6 +465,23 @@ export default {
               step="1"
               @input="setLabelFontSize(selectedLabel, $event.target.value)"
           >
+        </label>
+
+        <div class="chart-color-grid">
+          <label>
+            <span>Text</span>
+            <input v-model="selectedLabel.textConfig.fill" type="color">
+          </label>
+          <label>
+            <span>Background</span>
+            <input v-model="selectedLabel.tag.fill" type="color">
+          </label>
+        </div>
+
+        <label class="control-row">
+          <span>Opacity</span>
+          <input v-model.number="selectedLabel.opacity" type="range" min="0" max="1" step="0.05">
+          <input v-model.number="selectedLabel.opacity" class="number-input" type="number" min="0" max="1" step="0.05">
         </label>
       </div>
 

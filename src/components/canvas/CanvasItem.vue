@@ -146,7 +146,7 @@ const emit = defineEmits([
 
       <v-label
           v-else-if="child.type === 'label'"
-          :config="getGroupedChildConfig({ x: child.x, y: child.y, rotation: child.rotation || 0 })"
+          :config="getGroupedChildConfig({ x: child.x, y: child.y, rotation: child.rotation || 0, opacity: child.opacity ?? 1 })"
       >
         <v-tag :config="getGroupedChildConfig(child.tag)" />
         <v-text :config="getGroupedChildConfig({ ...child.textConfig, text: child.text })" />
@@ -310,7 +310,7 @@ const emit = defineEmits([
   <v-label
       v-else-if="item.type === 'label'"
       :ref="el => setRef(el, item.id)"
-      :config="{ x: item.x, y: item.y, draggable: item.draggable, rotation: item.rotation || 0 }"
+      :config="{ x: item.x, y: item.y, draggable: item.draggable, rotation: item.rotation || 0, opacity: item.opacity ?? 1 }"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"

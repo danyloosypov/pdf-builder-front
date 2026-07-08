@@ -147,13 +147,15 @@ export class LabelElement extends CanvasElement {
       y: 200,
       draggable: true,
       text: 'LABEL',
+      opacity: 1,
       tag: {
         fill: '#3498db',
         cornerRadius: 4
       },
       textConfig: {
         fontSize: 14,
-        fill: 'white',
+        fill: '#ffffff',
+        fontFamily: 'Arial, sans-serif',
         padding: 5
       },
       ...config

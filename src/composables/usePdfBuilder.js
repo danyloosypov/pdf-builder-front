@@ -1222,9 +1222,16 @@ function ensureChartSettings(item) {
 function ensureLabelSettings(item) {
   if (!item || item.type !== 'label') return
 
+  if (!item.tag) item.tag = {}
+  if (item.tag.fill === undefined) item.tag.fill = '#3498db'
+  item.tag.fill = getHexColor(item.tag.fill, '#3498db')
+  if (item.tag.cornerRadius === undefined) item.tag.cornerRadius = 4
+  if (item.opacity === undefined) item.opacity = 1
   if (!item.textConfig) item.textConfig = {}
   if (item.textConfig.fontSize === undefined) item.textConfig.fontSize = 14
-  if (item.textConfig.fill === undefined) item.textConfig.fill = 'white'
+  if (item.textConfig.fill === undefined) item.textConfig.fill = '#ffffff'
+  item.textConfig.fill = getHexColor(item.textConfig.fill, '#ffffff')
+  if (item.textConfig.fontFamily === undefined) item.textConfig.fontFamily = fontOptions[0].value
   if (item.textConfig.padding === undefined) item.textConfig.padding = 5
 }
 
