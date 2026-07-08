@@ -2353,6 +2353,21 @@ function getCanvasItemById(id) {
   return canvasItems.value.find(item => String(item.id) === String(id)) || null
 }
 
+function syncCanvasLayerOrder() {
+  let layer = null
+
+  canvasItems.value.forEach((item, index) => {
+    const node = nodeRefs.value[item.id]
+
+    if (!node) return
+
+    node.zIndex(index)
+    layer = layer || node.getLayer()
+  })
+
+  layer?.batchDraw()
+}
+
 function reorderCanvasItemLayer(itemId, targetLayerIndex) {
   const layerItems = canvasItems.value
   const currentLayerIndex = layerItems.findIndex(item => String(item.id) === String(itemId))
@@ -2383,7 +2398,10 @@ function reorderCanvasItemLayer(itemId, targetLayerIndex) {
   nextElements.splice(insertIndex, 0, item)
   elements.value = nextElements
 
-  nextTick(() => selectElement(item.id))
+  nextTick(() => {
+    syncCanvasLayerOrder()
+    selectElement(item.id)
+  })
 }
 
 function reorderSelectedLayer(targetLayerIndex) {
@@ -2520,11 +2538,14 @@ function handleLayerDragLeave(item) {
   }
 }
 
-function handleLayerDrop(event, targetItem) {
+function handleLayerDrop(event, targetEntry) {
   event.preventDefault()
 
+  const targetItem = targetEntry?.item || targetEntry
   const draggedId = event.dataTransfer?.getData('text/plain') || draggedLayerId.value
-  const targetLayerIndex = canvasItems.value.findIndex(item => String(item.id) === String(targetItem?.id))
+  const targetLayerIndex = Number.isInteger(targetEntry?.layerIndex)
+    ? targetEntry.layerIndex
+    : canvasItems.value.findIndex(item => String(item.id) === String(targetItem?.id))
 
   draggedLayerId.value = null
   dragOverLayerId.value = null
@@ -3812,6 +3833,7 @@ async function importLayoutFile(event) {
     getLayerTitleSuffix,
     getLayerItemTitle,
     getCanvasItemById,
+    syncCanvasLayerOrder,
     reorderCanvasItemLayer,
     reorderSelectedLayer,
     moveSelectedLayerBackward,

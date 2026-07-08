@@ -285,7 +285,7 @@ export default {
               @dragstart="handleLayerDragStart($event, entry.item)"
               @dragover="handleLayerDragOver($event, entry.item)"
               @dragleave="handleLayerDragLeave(entry.item)"
-              @drop="handleLayerDrop($event, entry.item)"
+              @drop="handleLayerDrop($event, entry)"
               @dragend="handleLayerDragEnd"
           >
             <span class="layer-list-title">{{ entry.title }}</span>
