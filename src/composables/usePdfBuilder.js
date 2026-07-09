@@ -1,5 +1,6 @@
 ﻿import { ref, computed, nextTick, watch } from 'vue'
 import { Extension, Mark } from '@tiptap/core'
+import { onMounted, onBeforeUnmount } from 'vue'
 import { useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -12,8 +13,10 @@ import {
   ImageElement,
   LabelElement,
   LineElement,
+  PieChartElement,
   RectElement,
   RegularPolygonElement,
+  RightTriangleElement,
   TextElement
 } from '../models/canvasElements'
 
@@ -205,8 +208,11 @@ const barcodeError = ref('')
 const isImportingLayout = ref(false)
 const layoutImportError = ref('')
 const layoutImportMessage = ref('')
+const copiedCanvasItems = ref([])
 const richRenderVersions = new Map()
 let canvasVersion = 0
+let generatedCanvasIdCounter = 0
+let clipboardPasteCount = 0
 const defaultImageSettings = {
   cornerRadius: 0,
   opacity: 1,
@@ -216,10 +222,16 @@ const defaultImageSettings = {
   cropTop: 0,
   cropBottom: 0
 }
-const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'line']
+const defaultTextSettings = {
+  fontSize: 20,
+  lineHeight: 1.35,
+  letterSpacing: 0
+}
+const CLIPBOARD_PASTE_OFFSET = 24
+const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line']
 const regularPolygonShapeTypes = ['polygon', 'triangle']
-const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'line', 'arrow']
-const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle']
+const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
+const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle']
 const cornerRadiusFields = [
   { label: 'Top left', index: 0 },
   { label: 'Top right', index: 1 },
@@ -231,6 +243,7 @@ const shapeLabels = {
   circle: 'Circle',
   polygon: 'Polygon',
   triangle: 'Triangle',
+  rightTriangle: 'Right Triangle',
   line: 'Line'
 }
 const defaultShapeSettings = {
@@ -242,7 +255,8 @@ const defaultShapeFills = {
   rect: '#dddddd',
   circle: '#87ceeb',
   polygon: '#f1c40f',
-  triangle: '#f59e0b'
+  triangle: '#f59e0b',
+  rightTriangle: '#60a5fa'
 }
 const defaultChartSettings = {
   chartType: 'line',
@@ -260,6 +274,24 @@ const defaultChartSettings = {
   pointRadius: 4,
   showGrid: true,
   showPoints: true
+}
+const defaultPieChartColors = [
+  '#2563eb',
+  '#ef4444',
+  '#10b981',
+  '#f59e0b',
+  '#8b5cf6',
+  '#14b8a6',
+  '#f97316',
+  '#64748b'
+]
+const defaultPieChartSettings = {
+  chartTitle: 'Pie chart',
+  pieData: 'Design, 45\nDevelopment, 30\nTesting, 25',
+  showLabels: true,
+  backgroundColor: '#ffffff',
+  labelColor: '#111827',
+  sliceColors: [...defaultPieChartColors]
 }
 const editorPosition = ref({
   x: 0,
@@ -433,6 +465,7 @@ const labelItems = computed(() => elements.value.filter(i => i.type === 'label')
 const polygonItems = computed(() => elements.value.filter(i => i.type === 'polygon'))
 const triangleItems = computed(() => elements.value.filter(i => i.type === 'triangle'))
 const chartItems = computed(() => elements.value.filter(i => i.type === 'chart'))
+const pieChartItems = computed(() => elements.value.filter(i => i.type === 'pieChart'))
 const shapeTextItems = computed(() => elements.value.filter(i => shapeTypes.includes(i.type) && i.shapeRichImage))
 const canvasItems = computed(() => elements.value.filter(item => !item.tableGroup))
 const hasCanvasElements = computed(() => elements.value.length > 0)
@@ -476,6 +509,7 @@ const selectedLabel = computed(() => {
 })
 const selectedImage = computed(() => selectedItem.value?.type === 'image' ? selectedItem.value : null)
 const selectedChart = computed(() => selectedItem.value?.type === 'chart' ? selectedItem.value : null)
+const selectedPieChart = computed(() => selectedItem.value?.type === 'pieChart' ? selectedItem.value : null)
 const selectedShape = computed(() => {
   const item = selectedItem.value
 
@@ -502,7 +536,7 @@ const transformerConfig = computed(() => {
     'bottom-right'
   ]
   const isMoveOnlySelection = selectedIds.value.length > 1 || selectedItem.value?.type === 'group'
-  const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart'].includes(selectedItem.value?.type)
+  const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart', 'pieChart'].includes(selectedItem.value?.type)
 
   return {
     rotateEnabled: !isMoveOnlySelection,
@@ -521,7 +555,9 @@ const richEditorStyle = computed(() => {
     transform: `rotate(${editorPosition.value.rotation}deg)`,
     '--editor-font-size': `${getEditingTextBaseFontSize(item)}px`,
     '--editor-color': getEditingTextColor(item),
-    '--editor-font-family': getEditingTextFontFamily(item)
+    '--editor-font-family': getEditingTextFontFamily(item),
+    '--editor-line-height': getEditingTextLineHeight(item),
+    '--editor-letter-spacing': `${getEditingTextLetterSpacing(item)}px`
   }
 })
 
@@ -877,6 +913,10 @@ function addTriangle() {
   }))
 }
 
+function addRightTriangle() {
+  elements.value.push(new RightTriangleElement())
+}
+
 function addLine() {
   elements.value.push(new LineElement())
 }
@@ -899,6 +939,18 @@ function addChart() {
   elements.value.push(new ChartElement({
     id,
     ...defaultChartSettings
+  }))
+
+  nextTick(() => selectElement(id))
+}
+
+function addPieChart() {
+  const id = Date.now()
+
+  elements.value.push(new PieChartElement({
+    id,
+    ...defaultPieChartSettings,
+    sliceColors: [...defaultPieChartSettings.sliceColors]
   }))
 
   nextTick(() => selectElement(id))
@@ -1061,16 +1113,36 @@ function getItemCoordinate(item, key) {
   return Number.isFinite(value) ? value : 0
 }
 
+function shouldKeepRuntimeCloneReference(key, value) {
+  if (['image', 'richImage', 'shapeRichImage'].includes(key)) return true
+
+  return Boolean(
+    value &&
+    typeof window !== 'undefined' &&
+    typeof window.Element !== 'undefined' &&
+    value instanceof window.Element
+  )
+}
+
+function cloneCanvasItemValue(value, key = '') {
+  if (shouldKeepRuntimeCloneReference(key, value)) return value
+
+  if (Array.isArray(value)) return value.map(entry => cloneCanvasItemValue(entry))
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        cloneCanvasItemValue(entryValue, entryKey)
+      ])
+    )
+  }
+
+  return value
+}
+
 function cloneCanvasItem(item) {
-  const clone = { ...item }
-
-  if (Array.isArray(item.points)) clone.points = [...item.points]
-  if (Array.isArray(item.cornerRadius)) clone.cornerRadius = [...item.cornerRadius]
-  if (item.tag) clone.tag = { ...item.tag }
-  if (item.textConfig) clone.textConfig = { ...item.textConfig }
-  if (Array.isArray(item.children)) clone.children = item.children.map(cloneCanvasItem)
-
-  return clone
+  return cloneCanvasItemValue(item)
 }
 
 function getSelectedItemsBounds(items) {
@@ -1195,6 +1267,10 @@ function getGroupedChartBoxConfig(item) {
   return getGroupedChildConfig(getChartBoxConfig(item))
 }
 
+function getGroupedPieChartBoxConfig(item) {
+  return getGroupedChildConfig(getPieChartBoxConfig(item))
+}
+
 function getGroupedShapeTextImageConfig(item) {
   return getGroupedChildConfig(getShapeTextImageConfig(item))
 }
@@ -1219,6 +1295,24 @@ function ensureChartSettings(item) {
   })
 }
 
+function ensurePieChartSettings(item) {
+  if (!item || item.type !== 'pieChart') return
+
+  Object.entries(defaultPieChartSettings).forEach(([key, value]) => {
+    if (item[key] === undefined) {
+      item[key] = Array.isArray(value) ? [...value] : value
+    }
+  })
+
+  if (!Array.isArray(item.sliceColors)) item.sliceColors = [...defaultPieChartColors]
+
+  item.backgroundColor = getHexColor(item.backgroundColor, defaultPieChartSettings.backgroundColor)
+  item.labelColor = getHexColor(item.labelColor, defaultPieChartSettings.labelColor)
+  item.sliceColors = item.sliceColors.map((color, index) => (
+    getHexColor(color, defaultPieChartColors[index % defaultPieChartColors.length])
+  ))
+}
+
 function ensureLabelSettings(item) {
   if (!item || item.type !== 'label') return
 
@@ -1235,6 +1329,14 @@ function ensureLabelSettings(item) {
   if (item.textConfig.padding === undefined) item.textConfig.padding = 5
 }
 
+function ensureTextSettings(item) {
+  if (!item || item.type !== 'text') return
+
+  item.fontSize = getFontSizeValue(item.fontSize ?? defaultTextSettings.fontSize)
+  item.lineHeight = getTextLineHeightValue(item.lineHeight ?? defaultTextSettings.lineHeight)
+  item.letterSpacing = getTextLetterSpacingValue(item.letterSpacing ?? defaultTextSettings.letterSpacing)
+}
+
 function getNormalizedTextFontSize(value) {
   if (value === null || value === undefined || value === '') return null
 
@@ -1245,17 +1347,51 @@ function getFontSizeValue(value) {
   return getNormalizedTextFontSize(value) || 20
 }
 
+function getTextLineHeightValue(value) {
+  const numericValue = Number.parseFloat(value)
+  const resolvedValue = Number.isFinite(numericValue) ? numericValue : defaultTextSettings.lineHeight
+
+  return Number(clampNumber(resolvedValue, 0.8, 3).toFixed(2))
+}
+
+function getTextLetterSpacingValue(value) {
+  const numericValue = Number.parseFloat(value)
+  const resolvedValue = Number.isFinite(numericValue) ? numericValue : defaultTextSettings.letterSpacing
+
+  return Number(clampNumber(resolvedValue, -10, 40).toFixed(1))
+}
+
+function rerenderTextRichImage(item) {
+  if (!item || item.type !== 'text' || item.id === editingId.value || !item.richText) return
+
+  const width = item.width || 240
+  const height = item.height || Math.ceil((item.fontSize || defaultTextSettings.fontSize) * (item.lineHeight || defaultTextSettings.lineHeight))
+
+  renderRichText(item, item.richText, width, height)
+}
+
 function setTextFontSize(item, value) {
   if (!item || item.type !== 'text') return
 
+  ensureTextSettings(item)
   item.fontSize = getFontSizeValue(value)
+  rerenderTextRichImage(item)
+}
 
-  if (item.richText && item.id !== editingId.value) {
-    const width = item.width || 240
-    const height = item.height || Math.ceil(item.fontSize * 1.5)
+function setTextLineHeight(item, value) {
+  if (!item || item.type !== 'text') return
 
-    renderRichText(item, item.richText, width, height)
-  }
+  ensureTextSettings(item)
+  item.lineHeight = getTextLineHeightValue(value)
+  rerenderTextRichImage(item)
+}
+
+function setTextLetterSpacing(item, value) {
+  if (!item || item.type !== 'text') return
+
+  ensureTextSettings(item)
+  item.letterSpacing = getTextLetterSpacingValue(value)
+  rerenderTextRichImage(item)
 }
 
 function setLabelFontSize(item, value) {
@@ -1415,6 +1551,14 @@ function getEditingTextFontFamily(item = editingItem.value) {
   return item?.fontFamily || 'Arial, sans-serif'
 }
 
+function getEditingTextLineHeight(item = editingItem.value) {
+  return item?.lineHeight ?? defaultTextSettings.lineHeight
+}
+
+function getEditingTextLetterSpacing(item = editingItem.value) {
+  return item?.letterSpacing ?? defaultTextSettings.letterSpacing
+}
+
 function ensureShapeTextSettings(item) {
   if (!canShapeHaveRichText(item)) return
 
@@ -1490,7 +1634,7 @@ function getFallbackElementPixelDimensions(item) {
 
   const rotation = Number(item.rotation) || 0
 
-  if (['text', 'image', 'rect', 'chart', 'group'].includes(item.type)) {
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'group'].includes(item.type)) {
     return {
       width: Math.max(0, Number(item.width) || 0),
       height: Math.max(0, Number(item.height) || 0),
@@ -1585,7 +1729,7 @@ function canEditElementDimensions(item) {
 function getEditableElementDimensions(item) {
   if (!canEditElementDimensions(item)) return null
 
-  if (item.type === 'image' || item.type === 'rect') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle') {
     return {
       width: Math.max(1, Number(item.width) || 1),
       height: Math.max(1, Number(item.height) || 1)
@@ -1662,7 +1806,7 @@ function setEditableElementDimension(item, dimension, value) {
   const currentDimensions = getEditableElementDimensions(item)
   const targetValue = getDimensionInputValue(value, currentDimensions?.[dimension])
 
-  if (item.type === 'image' || item.type === 'rect') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle') {
     item[dimension] = targetValue
   } else if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     item.radius = targetValue / 2
@@ -1676,7 +1820,7 @@ function setEditableElementDimension(item, dimension, value) {
 function getShapeTextCenter(item) {
   const rotation = item.rotation || 0
 
-  if (item.type === 'rect') {
+  if (item.type === 'rect' || item.type === 'rightTriangle') {
     return getRotatedPoint(
       item.x || 0,
       item.y || 0,
@@ -1705,7 +1849,7 @@ function getShapeTextCenter(item) {
 }
 
 function getDefaultShapeTextSize(item) {
-  if (item.type === 'rect') {
+  if (item.type === 'rect' || item.type === 'rightTriangle') {
     return {
       width: Math.max(80, (item.width || 120) * 0.8),
       height: Math.max(32, Math.min(80, (item.height || 80) * 0.6))
@@ -1759,9 +1903,12 @@ function getShapeTextImageConfig(item) {
 }
 
 function getTextConfig(item) {
-  const { richText, richImage, ...config } = item
+  const { richText, richTextJson, richImage, ...config } = item
   return {
     ...config,
+    fontSize: item.fontSize ?? defaultTextSettings.fontSize,
+    lineHeight: item.lineHeight ?? defaultTextSettings.lineHeight,
+    letterSpacing: item.letterSpacing ?? defaultTextSettings.letterSpacing,
     visible: item.id !== editingId.value
   }
 }
@@ -1774,6 +1921,27 @@ function getRectConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.rect,
     cornerRadius: getCornerRadiusConfig(item)
+  }
+}
+
+function getRightTriangleConfig(item) {
+  const width = Math.max(1, Number(item.width) || 1)
+  const height = Math.max(1, Number(item.height) || 1)
+
+  return {
+    x: item.x,
+    y: item.y,
+    width,
+    height,
+    points: [0, height, 0, 0, width, height],
+    closed: true,
+    fill: item.fill ?? defaultShapeFills.rightTriangle,
+    stroke: item.stroke ?? defaultShapeSettings.stroke,
+    strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
+    opacity: item.opacity ?? defaultShapeSettings.opacity,
+    lineJoin: 'round',
+    rotation: item.rotation || 0,
+    draggable: item.draggable !== false
   }
 }
 
@@ -2239,6 +2407,191 @@ function getChartYAxisLabelConfig(item) {
   }
 }
 
+function getPieChartBoxConfig(item) {
+  return {
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    rotation: item.rotation || 0,
+    draggable: item.draggable
+  }
+}
+
+function getPieChartBackgroundConfig(item) {
+  return {
+    x: 0,
+    y: 0,
+    width: item.width,
+    height: item.height,
+    fill: item.backgroundColor || defaultPieChartSettings.backgroundColor
+  }
+}
+
+function parsePieChartData(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const separatorIndex = line.search(/[,;\t:]/)
+      const rawName = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line
+      const rawValue = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : ''
+      const numericValue = Number.parseFloat(rawValue.replace(',', '.'))
+
+      return {
+        index,
+        label: rawName.trim() || `Slice ${index + 1}`,
+        value: Number.isFinite(numericValue) ? Math.max(0, numericValue) : 0
+      }
+    })
+    .filter(entry => entry.value > 0)
+}
+
+function getPieChartSliceColor(item, index) {
+  const sourceColor = Array.isArray(item?.sliceColors) ? item.sliceColors[index] : null
+
+  return getHexColor(sourceColor, defaultPieChartColors[index % defaultPieChartColors.length])
+}
+
+function setPieChartSliceColor(item, index, value) {
+  if (!item || item.type !== 'pieChart') return
+
+  if (!Array.isArray(item.sliceColors)) item.sliceColors = []
+  item.sliceColors[index] = getHexColor(value, defaultPieChartColors[index % defaultPieChartColors.length])
+}
+
+function getPieChartEntries(item) {
+  const entries = parsePieChartData(item?.pieData)
+  let usedTotal = 0
+  const nextEntries = []
+
+  entries.forEach((entry, index) => {
+    if (usedTotal >= 100) return
+
+    const visibleValue = Math.min(entry.value, 100 - usedTotal)
+
+    usedTotal += visibleValue
+    nextEntries.push({
+      ...entry,
+      value: visibleValue,
+      index,
+      color: getPieChartSliceColor(item, index),
+      percentage: visibleValue / 100,
+      isRemainder: false
+    })
+  })
+
+  if (usedTotal < 100) {
+    nextEntries.push({
+      index: nextEntries.length,
+      label: 'Remaining',
+      value: 100 - usedTotal,
+      color: 'rgba(255,255,255,0.01)',
+      percentage: (100 - usedTotal) / 100,
+      isRemainder: true
+    })
+  }
+
+  return nextEntries
+}
+
+function getPieChartPlotMeta(item) {
+  const width = Math.max(1, item.width || 1)
+  const height = Math.max(1, item.height || 1)
+  const hasTitle = Boolean(item.chartTitle)
+  const padding = 12
+  const titleHeight = hasTitle ? 30 : 8
+  const bottomPadding = 12
+  const plotWidth = Math.max(1, width - padding * 2)
+  const plotHeight = Math.max(1, height - titleHeight - bottomPadding)
+  const radius = Math.max(8, Math.min(plotWidth, plotHeight) / 2)
+
+  return {
+    width,
+    height,
+    padding,
+    titleHeight,
+    plotWidth,
+    plotHeight,
+    radius,
+    centerX: width / 2,
+    centerY: titleHeight + plotHeight / 2
+  }
+}
+
+function getPieChartSliceConfigs(item) {
+  const meta = getPieChartPlotMeta(item)
+  let rotation = -90
+
+  return getPieChartEntries(item).map(entry => {
+    const angle = entry.percentage * 360
+    const config = {
+      id: entry.index,
+      x: meta.centerX,
+      y: meta.centerY,
+      radius: meta.radius,
+      angle,
+      rotation,
+      fill: entry.color,
+      stroke: entry.isRemainder ? '#94a3b8' : '#ffffff',
+      strokeWidth: entry.isRemainder ? 1.5 : 1,
+      dash: entry.isRemainder ? [5, 4] : undefined
+    }
+
+    rotation += angle
+
+    return config
+  })
+}
+
+function getPieChartLabelConfigs(item) {
+  if (!item.showLabels) return []
+
+  const meta = getPieChartPlotMeta(item)
+  let rotation = -90
+
+  return getPieChartEntries(item)
+    .filter(entry => !entry.isRemainder)
+    .map(entry => {
+    const angle = entry.percentage * 360
+    const midAngle = (rotation + angle / 2) * Math.PI / 180
+    const labelRadius = meta.radius * 0.62
+    const labelWidth = Math.min(96, Math.max(54, meta.radius * 1.25))
+    const x = meta.centerX + Math.cos(midAngle) * labelRadius - labelWidth / 2
+    const y = meta.centerY + Math.sin(midAngle) * labelRadius - 10
+
+    rotation += angle
+
+    return {
+      id: entry.index,
+      x,
+      y,
+      width: labelWidth,
+      text: `${entry.label}\n${formatChartAxisValue(entry.value)}`,
+      fontSize: 10,
+      fill: item.labelColor || defaultPieChartSettings.labelColor,
+      align: 'center',
+      lineHeight: 1.1,
+      listening: false
+    }
+  })
+}
+
+function getPieChartTitleConfig(item) {
+  return {
+    x: 0,
+    y: 6,
+    width: Math.max(1, item.width || 1),
+    text: item.chartTitle || '',
+    fontSize: 14,
+    fontStyle: 'bold',
+    fill: '#0f172a',
+    align: 'center',
+    listening: false
+  }
+}
+
 function getCurrentTextStyle(attributeName, fallback) {
   if (!editor.value) return fallback
 
@@ -2337,10 +2690,12 @@ function getLayerItemTitle(item) {
   if (item.type === 'circle') return `Circle${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'polygon') return `Polygon${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'triangle') return `Triangle${getLayerTitleSuffix(item.shapeText)}`
+  if (item.type === 'rightTriangle') return `Right Triangle${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'line') return `Line${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'arrow') return 'Arrow'
   if (item.type === 'label') return `Label${getLayerTitleSuffix(item.text)}`
   if (item.type === 'chart') return `Graph${getLayerTitleSuffix(item.chartTitle)}`
+  if (item.type === 'pieChart') return `Pie Chart${getLayerTitleSuffix(item.chartTitle)}`
   if (item.type === 'group' && item.groupKind === 'table') {
     return `Table (${item.tableRows || 0} x ${item.tableCols || 0})`
   }
@@ -2459,9 +2814,125 @@ function alignSelectedElements(axis, alignment) {
   updateTransformerSelection()
 }
 
+function collectCanvasItemIds(items, ids = new Set()) {
+  const sourceItems = Array.isArray(items) ? items : [items]
+
+  sourceItems.forEach(item => {
+    if (!item || typeof item !== 'object') return
+    if (item.id !== undefined && item.id !== null) ids.add(String(item.id))
+    if (Array.isArray(item.children)) collectCanvasItemIds(item.children, ids)
+  })
+
+  return ids
+}
+
+function createUniqueCanvasItemId(usedIds) {
+  let id = null
+
+  do {
+    generatedCanvasIdCounter += 1
+    id = Date.now() + generatedCanvasIdCounter
+  } while (usedIds.has(String(id)))
+
+  usedIds.add(String(id))
+
+  return id
+}
+
+function assignClonedCanvasItemIds(item, usedIds) {
+  if (!item || typeof item !== 'object') return
+
+  item.id = createUniqueCanvasItemId(usedIds)
+
+  if (Array.isArray(item.children)) {
+    item.children.forEach(child => assignClonedCanvasItemIds(child, usedIds))
+  }
+}
+
+function getSelectedCanvasItemsForClipboard() {
+  const selectedIdSet = new Set(selectedIds.value.map(id => String(id)))
+
+  return canvasItems.value.filter(item => selectedIdSet.has(String(item.id)))
+}
+
+function copySelectedCanvasItems() {
+  if (editingId.value) return false
+
+  const itemsToCopy = getSelectedCanvasItemsForClipboard()
+
+  if (!itemsToCopy.length) return false
+
+  copiedCanvasItems.value = itemsToCopy.map(cloneCanvasItem)
+  clipboardPasteCount = 0
+
+  return true
+}
+
+function preparePastedCanvasItem(item, offset, usedIds) {
+  const pastedItem = cloneCanvasItem(item)
+
+  assignClonedCanvasItemIds(pastedItem, usedIds)
+  moveCanvasItemByDelta(pastedItem, offset, offset)
+  ensureImportedElementSettings(pastedItem)
+
+  return pastedItem
+}
+
+function pasteCopiedCanvasItems() {
+  if (editingId.value || !copiedCanvasItems.value.length) return false
+
+  const usedIds = collectCanvasItemIds(elements.value)
+  const pasteOffset = CLIPBOARD_PASTE_OFFSET * (clipboardPasteCount + 1)
+  const pastedItems = copiedCanvasItems.value.map(item => (
+    preparePastedCanvasItem(item, pasteOffset, usedIds)
+  ))
+
+  elements.value = [...elements.value, ...pastedItems]
+  clipboardPasteCount += 1
+
+  nextTick(() => {
+    pastedItems.forEach(renderImportedRichTextImages)
+    selectElements(pastedItems.map(item => item.id))
+    syncCanvasLayerOrder()
+  })
+
+  return true
+}
+
+function isEditableKeyboardTarget(target) {
+  if (!target) return false
+
+  const element = target.nodeType === 3 ? target.parentElement : target
+  const tagName = element?.tagName?.toLowerCase()
+
+  return Boolean(
+    element?.isContentEditable ||
+    ['input', 'textarea', 'select'].includes(tagName) ||
+    element?.closest?.('.rich-text-editor')
+  )
+}
+
+function handleGlobalClipboardKeyDown(event) {
+  if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+
+  const key = String(event.key || '').toLowerCase()
+  let handled = false
+
+  if (key === 'c') handled = copySelectedCanvasItems()
+  if (key === 'v') handled = pasteCopiedCanvasItems()
+
+  if (!handled) return
+
+  event.preventDefault()
+  event.stopPropagation()
+}
+
 function ensureSelectableItemSettings(item) {
   ensureImageSettings(item)
+  ensureTextSettings(item)
   ensureChartSettings(item)
+  ensurePieChartSettings(item)
   ensureLabelSettings(item)
   ensureShapeSettings(item)
 }
@@ -2815,6 +3286,91 @@ function getStoredRichTextHtml(item, htmlKey, jsonKey, fallbackHtml = '') {
   return jsonHtml || fallbackHtml
 }
 
+function shouldLowercaseText(value) {
+  const casedText = Array.from(String(value || ''))
+    .filter(character => character.toLocaleLowerCase() !== character.toLocaleUpperCase())
+    .join('')
+
+  return Boolean(casedText) && casedText === casedText.toLocaleUpperCase()
+}
+
+function getTextCaseTransformer(value) {
+  return shouldLowercaseText(value)
+    ? text => String(text || '').toLocaleLowerCase()
+    : text => String(text || '').toLocaleUpperCase()
+}
+
+function transformRichTextJsonText(content, transform) {
+  if (Array.isArray(content)) {
+    return content.map(node => transformRichTextJsonText(node, transform))
+  }
+
+  if (content && typeof content === 'object') {
+    const nextContent = { ...content }
+
+    if (typeof nextContent.text === 'string') {
+      nextContent.text = transform(nextContent.text)
+    }
+
+    if (Array.isArray(nextContent.content)) {
+      nextContent.content = nextContent.content.map(node => transformRichTextJsonText(node, transform))
+    }
+
+    return nextContent
+  }
+
+  return content
+}
+
+function transformRichTextHtmlText(html, transform) {
+  const template = document.createElement('template')
+
+  template.innerHTML = html || ''
+
+  const walker = document.createTreeWalker(template.content, window.NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+
+  while (node) {
+    node.textContent = transform(node.textContent || '')
+    node = walker.nextNode()
+  }
+
+  return template.innerHTML
+}
+
+function toggleTextCase(item) {
+  if (!item || item.type !== 'text') return
+
+  ensureTextSettings(item)
+
+  const sourceText = editingId.value === item.id && editor.value
+    ? editor.value.getText({ blockSeparator: '\n' })
+    : item.text
+  const transform = getTextCaseTransformer(sourceText)
+
+  if (editingId.value === item.id && editor.value) {
+    const transformedContent = transformRichTextJsonText(editor.value.getJSON(), transform)
+
+    editor.value.commands.setContent(transformedContent, { emitUpdate: false })
+    syncEditorContent()
+    return
+  }
+
+  item.text = transform(item.text || '')
+
+  if (item.richTextJson) {
+    item.richTextJson = transformRichTextJsonText(item.richTextJson, transform)
+  }
+
+  if (item.richText) {
+    item.richText = transformRichTextHtmlText(item.richText, transform)
+  } else if (item.richTextJson) {
+    item.richText = getHtmlFromRichTextJson(item.richTextJson)
+  }
+
+  rerenderTextRichImage(item)
+}
+
 function syncActiveTextEditForLayoutExport() {
   if (!editingItem.value || !editor.value) return
 
@@ -2912,7 +3468,7 @@ function finishTextEditing() {
   const contentElement = editor.value.view.dom
   const height = Math.max(
     Math.ceil(contentElement.scrollHeight),
-    Math.ceil(getEditingTextBaseFontSize(item) * 1.5)
+    Math.ceil(getEditingTextBaseFontSize(item) * getEditingTextLineHeight(item))
   )
 
   if (target === 'shape') {
@@ -3038,8 +3594,9 @@ function renderRichText(item, html, width, height, options = {}) {
     'padding:4px',
     `color:${styleOptions.color || item.fill || '#111'}`,
     `font-family:${styleOptions.fontFamily || item.fontFamily || 'Arial, sans-serif'}`,
-    `font-size:${styleOptions.fontSize || item.fontSize || 20}px`,
-    `line-height:${styleOptions.lineHeight || item.lineHeight || 1.35}`,
+    `font-size:${styleOptions.fontSize || item.fontSize || defaultTextSettings.fontSize}px`,
+    `line-height:${styleOptions.lineHeight ?? item.lineHeight ?? defaultTextSettings.lineHeight}`,
+    `letter-spacing:${styleOptions.letterSpacing ?? item.letterSpacing ?? defaultTextSettings.letterSpacing}px`,
     'overflow-wrap:anywhere'
   ].join(';'))
 
@@ -3134,7 +3691,7 @@ function updateTransform(e, id) {
     return
   }
 
-  if (el.type === 'image' || el.type === 'rect' || el.type === 'chart') {
+  if (el.type === 'image' || el.type === 'rect' || el.type === 'rightTriangle' || el.type === 'chart' || el.type === 'pieChart') {
     el.width = Math.max(10, node.width() * Math.abs(node.scaleX()))
     el.height = Math.max(10, node.height() * Math.abs(node.scaleY()))
     node.width(el.width)
@@ -3401,6 +3958,8 @@ function createImportedElementFromConfig(config) {
     case 'polygon':
     case 'triangle':
       return new RegularPolygonElement(config)
+    case 'rightTriangle':
+      return new RightTriangleElement(config)
     case 'line':
       return new LineElement(config)
     case 'arrow':
@@ -3409,6 +3968,8 @@ function createImportedElementFromConfig(config) {
       return new LabelElement(config)
     case 'chart':
       return new ChartElement(config)
+    case 'pieChart':
+      return new PieChartElement(config)
     case 'group':
       return new GroupElement(config)
     default:
@@ -3488,7 +4049,13 @@ function renderImportedRichTextImages(item) {
 
     if (html) {
       item.richText = html
-      renderRichText(item, html, item.width || 240, item.height || Math.ceil((item.fontSize || 20) * 1.5))
+      ensureTextSettings(item)
+      renderRichText(
+        item,
+        html,
+        item.width || 240,
+        item.height || Math.ceil(item.fontSize * item.lineHeight)
+      )
     }
   }
 
@@ -3572,6 +4139,14 @@ async function importLayoutFile(event) {
   }
 }
 
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalClipboardKeyDown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleGlobalClipboardKeyDown)
+})
+
   return {
     elements,
     PX_PER_INCH,
@@ -3630,9 +4205,11 @@ async function importLayoutFile(event) {
     isImportingLayout,
     layoutImportError,
     layoutImportMessage,
+    copiedCanvasItems,
     richRenderVersions,
     canvasVersion,
     defaultImageSettings,
+    defaultTextSettings,
     shapeTypes,
     regularPolygonShapeTypes,
     dimensionEditableTypes,
@@ -3642,6 +4219,8 @@ async function importLayoutFile(event) {
     defaultShapeSettings,
     defaultShapeFills,
     defaultChartSettings,
+    defaultPieChartColors,
+    defaultPieChartSettings,
     editorPosition,
     fontOptions,
     RichTextStyle,
@@ -3657,6 +4236,7 @@ async function importLayoutFile(event) {
     polygonItems,
     triangleItems,
     chartItems,
+    pieChartItems,
     shapeTextItems,
     canvasItems,
     hasCanvasElements,
@@ -3675,6 +4255,7 @@ async function importLayoutFile(event) {
     selectedLabel,
     selectedImage,
     selectedChart,
+    selectedPieChart,
     selectedShape,
     editingItem,
     transformerConfig,
@@ -3709,11 +4290,13 @@ async function importLayoutFile(event) {
     addRect,
     addCircle,
     addTriangle,
+    addRightTriangle,
     addLine,
     addArrow,
     addLabel,
     addPolygon,
     addChart,
+    addPieChart,
     addTable,
     setRef,
     clampNumber,
@@ -3726,6 +4309,8 @@ async function importLayoutFile(event) {
     getClampedPageMargins,
     getCanvasBounds,
     getItemCoordinate,
+    shouldKeepRuntimeCloneReference,
+    cloneCanvasItemValue,
     cloneCanvasItem,
     getSelectedItemsBounds,
     getSelectedItemRects,
@@ -3742,13 +4327,21 @@ async function importLayoutFile(event) {
     getGroupedImageContentConfig,
     getGroupedRectConfig,
     getGroupedChartBoxConfig,
+    getGroupedPieChartBoxConfig,
     getGroupedShapeTextImageConfig,
     ensureImageSettings,
     ensureChartSettings,
+    ensurePieChartSettings,
     ensureLabelSettings,
+    ensureTextSettings,
     getNormalizedTextFontSize,
     getFontSizeValue,
+    getTextLineHeightValue,
+    getTextLetterSpacingValue,
+    rerenderTextRichImage,
     setTextFontSize,
+    setTextLineHeight,
+    setTextLetterSpacing,
     setLabelFontSize,
     canShapeHaveFill,
     canShapeHaveCornerRadius,
@@ -3766,6 +4359,8 @@ async function importLayoutFile(event) {
     getEditingTextBaseFontSize,
     getEditingTextColor,
     getEditingTextFontFamily,
+    getEditingTextLineHeight,
+    getEditingTextLetterSpacing,
     ensureShapeTextSettings,
     getRotatedPoint,
     getLineRawBounds,
@@ -3787,6 +4382,7 @@ async function importLayoutFile(event) {
     getShapeTextImageConfig,
     getTextConfig,
     getRectConfig,
+    getRightTriangleConfig,
     getRichTextImageConfig,
     getImageBoxConfig,
     getImageHitAreaConfig,
@@ -3817,6 +4413,16 @@ async function importLayoutFile(event) {
     getChartTitleConfig,
     getChartXAxisLabelConfig,
     getChartYAxisLabelConfig,
+    getPieChartBoxConfig,
+    getPieChartBackgroundConfig,
+    parsePieChartData,
+    getPieChartSliceColor,
+    setPieChartSliceColor,
+    getPieChartEntries,
+    getPieChartPlotMeta,
+    getPieChartSliceConfigs,
+    getPieChartLabelConfigs,
+    getPieChartTitleConfig,
     getCurrentTextStyle,
     getCurrentTextColor,
     getCurrentTextBackground,
@@ -3841,6 +4447,15 @@ async function importLayoutFile(event) {
     moveSelectedLayerToBack,
     moveSelectedLayerToFront,
     alignSelectedElements,
+    collectCanvasItemIds,
+    createUniqueCanvasItemId,
+    assignClonedCanvasItemIds,
+    getSelectedCanvasItemsForClipboard,
+    copySelectedCanvasItems,
+    preparePastedCanvasItem,
+    pasteCopiedCanvasItems,
+    isEditableKeyboardTarget,
+    handleGlobalClipboardKeyDown,
     ensureSelectableItemSettings,
     updateTransformerSelection,
     selectElements,
@@ -3871,6 +4486,11 @@ async function importLayoutFile(event) {
     getStoredRichTextEditorContent,
     getHtmlFromRichTextJson,
     getStoredRichTextHtml,
+    shouldLowercaseText,
+    getTextCaseTransformer,
+    transformRichTextJsonText,
+    transformRichTextHtmlText,
+    toggleTextCase,
     syncActiveTextEditForLayoutExport,
     startTextEditing,
     startShapeTextEditing,

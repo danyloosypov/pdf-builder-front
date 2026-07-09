@@ -14,6 +14,7 @@ defineProps({
   getGroupedRectConfig: { type: Function, required: true },
   getGroupedChildConfig: { type: Function, required: true },
   getGroupedChartBoxConfig: { type: Function, required: true },
+  getGroupedPieChartBoxConfig: { type: Function, required: true },
   getGroupedShapeTextImageConfig: { type: Function, required: true },
   getRichTextImageConfig: { type: Function, required: true },
   getTextConfig: { type: Function, required: true },
@@ -21,6 +22,7 @@ defineProps({
   getImageHitAreaConfig: { type: Function, required: true },
   getImageContentConfig: { type: Function, required: true },
   getRectConfig: { type: Function, required: true },
+  getRightTriangleConfig: { type: Function, required: true },
   getChartBoxConfig: { type: Function, required: true },
   getChartHitAreaConfig: { type: Function, required: true },
   getChartTitleConfig: { type: Function, required: true },
@@ -33,6 +35,11 @@ defineProps({
   getChartAreaConfig: { type: Function, required: true },
   getChartLineConfig: { type: Function, required: true },
   getChartPointConfigs: { type: Function, required: true },
+  getPieChartBoxConfig: { type: Function, required: true },
+  getPieChartBackgroundConfig: { type: Function, required: true },
+  getPieChartTitleConfig: { type: Function, required: true },
+  getPieChartSliceConfigs: { type: Function, required: true },
+  getPieChartLabelConfigs: { type: Function, required: true },
   getShapeTextImageConfig: { type: Function, required: true }
 })
 
@@ -94,6 +101,11 @@ const emit = defineEmits([
           :config="getGroupedChildConfig(child)"
       />
 
+      <v-line
+          v-else-if="child.type === 'rightTriangle'"
+          :config="getGroupedChildConfig(getRightTriangleConfig(child))"
+      />
+
       <v-group
           v-else-if="child.type === 'chart'"
           :config="getGroupedChartBoxConfig(child)"
@@ -131,6 +143,27 @@ const emit = defineEmits([
             v-for="point in getChartPointConfigs(child)"
             :key="point.id"
             :config="point"
+        />
+      </v-group>
+
+      <v-group
+          v-else-if="child.type === 'pieChart'"
+          :config="getGroupedPieChartBoxConfig(child)"
+      >
+        <v-rect :config="getGroupedChildConfig(getPieChartBackgroundConfig(child))" />
+        <v-text
+            v-if="child.chartTitle"
+            :config="getPieChartTitleConfig(child)"
+        />
+        <v-wedge
+            v-for="slice in getPieChartSliceConfigs(child)"
+            :key="slice.id"
+            :config="slice"
+        />
+        <v-text
+            v-for="label in getPieChartLabelConfigs(child)"
+            :key="label.id"
+            :config="label"
         />
       </v-group>
 
@@ -237,6 +270,19 @@ const emit = defineEmits([
       @transformend="emit('transform-update', $event, item.id)"
   />
 
+  <v-line
+      v-else-if="item.type === 'rightTriangle'"
+      :ref="el => setRef(el, item.id)"
+      :config="getRightTriangleConfig(item)"
+      @mousedown="emit('selectable-pointer-down', $event, item.id)"
+      @touchstart="emit('selectable-pointer-down', $event, item.id)"
+      @click="emit('selectable-click', $event)"
+      @dblclick="emit('shape-text-edit', item)"
+      @dragmove="emit('position-drag', $event, item.id)"
+      @dragend="emit('position-update', $event, item.id)"
+      @transformend="emit('transform-update', $event, item.id)"
+  />
+
   <v-group
       v-else-if="item.type === 'chart'"
       :ref="el => setRef(el, item.id)"
@@ -280,6 +326,33 @@ const emit = defineEmits([
         v-for="point in getChartPointConfigs(item)"
         :key="point.id"
         :config="point"
+    />
+  </v-group>
+
+  <v-group
+      v-else-if="item.type === 'pieChart'"
+      :ref="el => setRef(el, item.id)"
+      :config="getPieChartBoxConfig(item)"
+      @mousedown="emit('selectable-pointer-down', $event, item.id)"
+      @touchstart="emit('selectable-pointer-down', $event, item.id)"
+      @click="emit('selectable-click', $event)"
+      @dragend="emit('position-update', $event, item.id)"
+      @transformend="emit('transform-update', $event, item.id)"
+  >
+    <v-rect :config="getPieChartBackgroundConfig(item)" />
+    <v-text
+        v-if="item.chartTitle"
+        :config="getPieChartTitleConfig(item)"
+    />
+    <v-wedge
+        v-for="slice in getPieChartSliceConfigs(item)"
+        :key="slice.id"
+        :config="slice"
+    />
+    <v-text
+        v-for="label in getPieChartLabelConfigs(item)"
+        :key="label.id"
+        :config="label"
     />
   </v-group>
 

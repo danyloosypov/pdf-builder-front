@@ -19,6 +19,8 @@ export class TextElement extends CanvasElement {
       width: 240,
       height: 80,
       fontSize: 20,
+      lineHeight: 1.35,
+      letterSpacing: 0,
       wrap: 'word',
       draggable: true,
       ...config
@@ -105,6 +107,25 @@ export class RegularPolygonElement extends CanvasElement {
   }
 }
 
+export class RightTriangleElement extends CanvasElement {
+  constructor(config = {}) {
+    super({
+      id: createId(),
+      type: 'rightTriangle',
+      x: 220,
+      y: 220,
+      width: 120,
+      height: 90,
+      fill: '#60a5fa',
+      stroke: '#111827',
+      strokeWidth: 2,
+      opacity: 1,
+      draggable: true,
+      ...config
+    })
+  }
+}
+
 export class LineElement extends CanvasElement {
   constructor(config = {}) {
     super({
@@ -172,6 +193,22 @@ export class ChartElement extends CanvasElement {
       y: 220,
       width: 280,
       height: 170,
+      rotation: 0,
+      draggable: true,
+      ...config
+    })
+  }
+}
+
+export class PieChartElement extends CanvasElement {
+  constructor(config = {}) {
+    super({
+      id: createId(),
+      type: 'pieChart',
+      x: 180,
+      y: 220,
+      width: 280,
+      height: 220,
       rotation: 0,
       draggable: true,
       ...config

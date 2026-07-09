@@ -529,6 +529,37 @@
   cursor: pointer;
 }
 
+.pie-slice-color-list {
+  display: grid;
+  gap: 6px;
+}
+
+.pie-slice-color-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.pie-slice-color-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pie-slice-color-row input[type="color"] {
+  width: 32px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
 .checkbox-control {
   justify-content: flex-start;
 }
@@ -566,10 +597,6 @@
   position: absolute;
   z-index: 10;
   min-height: calc(var(--editor-font-size) * 1.5);
-  color: var(--editor-color);
-  font-family: var(--editor-font-family);
-  font-size: var(--editor-font-size);
-  line-height: 1.35;
   background: white;
   border: 1px solid #2563eb;
   box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
@@ -673,6 +700,11 @@
 .rich-text-content {
   min-height: calc(var(--editor-font-size) * 1.5);
   padding: 4px;
+  color: var(--editor-color);
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+  letter-spacing: var(--editor-letter-spacing);
   outline: none;
   overflow-wrap: anywhere;
 }

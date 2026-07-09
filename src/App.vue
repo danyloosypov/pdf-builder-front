@@ -213,8 +213,10 @@ export default {
       <button @click="addRect">Rect</button>
       <button @click="addCircle">Circle</button>
       <button @click="addTriangle">Triangle</button>
+      <button @click="addRightTriangle">Right Triangle</button>
       <button @click="addPolygon">Polygon</button>
       <button @click="addChart">Graph</button>
+      <button @click="addPieChart">Pie Chart</button>
       <button @click="addLine">Line</button>
       <button @click="addArrow">Arrow</button>
       <button @click="addLabel">Label</button>
@@ -419,6 +421,52 @@ export default {
               @input="setTextFontSize(selectedText, $event.target.value)"
           >
         </label>
+
+        <label class="control-row">
+          <span>Letter Spacing</span>
+          <input
+              :value="selectedText.letterSpacing ?? 0"
+              type="range"
+              min="-10"
+              max="40"
+              step="0.5"
+              @input="setTextLetterSpacing(selectedText, $event.target.value)"
+          >
+          <input
+              :value="selectedText.letterSpacing ?? 0"
+              class="number-input"
+              type="number"
+              min="-10"
+              max="40"
+              step="0.5"
+              @input="setTextLetterSpacing(selectedText, $event.target.value)"
+          >
+        </label>
+
+        <label class="control-row">
+          <span>Line Height</span>
+          <input
+              :value="selectedText.lineHeight ?? 1.35"
+              type="range"
+              min="0.8"
+              max="3"
+              step="0.05"
+              @input="setTextLineHeight(selectedText, $event.target.value)"
+          >
+          <input
+              :value="selectedText.lineHeight ?? 1.35"
+              class="number-input"
+              type="number"
+              min="0.8"
+              max="3"
+              step="0.05"
+              @input="setTextLineHeight(selectedText, $event.target.value)"
+          >
+        </label>
+
+        <div class="selection-button-grid">
+          <button type="button" @click="toggleTextCase(selectedText)">Toggle Case</button>
+        </div>
       </div>
 
       <div v-if="selectedLabel" class="image-editor-panel">
@@ -685,6 +733,49 @@ export default {
           <span>Show points</span>
         </label>
       </div>
+
+      <div v-if="selectedPieChart" class="image-editor-panel">
+        <div class="panel-title">Pie Chart Settings</div>
+
+        <label class="control-row">
+          <span>Title</span>
+          <input v-model="selectedPieChart.chartTitle" class="chart-text-input" type="text" placeholder="Pie chart title">
+        </label>
+
+        <label class="checkbox-control">
+          <input v-model="selectedPieChart.showLabels" type="checkbox">
+          <span>Show labels</span>
+        </label>
+
+        <label class="control-row">
+          <span>Data (%)</span>
+          <textarea
+              v-model="selectedPieChart.pieData"
+              class="chart-data-input"
+              rows="5"
+              placeholder="Design, 45&#10;Development, 30&#10;Testing, 25"
+          />
+        </label>
+
+        <div class="pie-slice-color-list">
+          <label
+              v-for="slice in getPieChartEntries(selectedPieChart)"
+              :key="slice.index"
+              class="pie-slice-color-row"
+          >
+            <span>{{ slice.label }}</span>
+            <input
+                :value="getPieChartSliceColor(selectedPieChart, slice.index)"
+                type="color"
+                @input="setPieChartSliceColor(selectedPieChart, slice.index, $event.target.value)"
+            >
+          </label>
+        </div>
+
+        <p v-if="!getPieChartEntries(selectedPieChart).length" class="empty-layer-list">
+          Add rows as Name, Value
+        </p>
+      </div>
     </div>
 
     <div class="canvas-area">
@@ -719,6 +810,7 @@ export default {
                   :get-grouped-rect-config="getGroupedRectConfig"
                   :get-grouped-child-config="getGroupedChildConfig"
                   :get-grouped-chart-box-config="getGroupedChartBoxConfig"
+                  :get-grouped-pie-chart-box-config="getGroupedPieChartBoxConfig"
                   :get-grouped-shape-text-image-config="getGroupedShapeTextImageConfig"
                   :get-rich-text-image-config="getRichTextImageConfig"
                   :get-text-config="getTextConfig"
@@ -726,6 +818,7 @@ export default {
                   :get-image-hit-area-config="getImageHitAreaConfig"
                   :get-image-content-config="getImageContentConfig"
                   :get-rect-config="getRectConfig"
+                  :get-right-triangle-config="getRightTriangleConfig"
                   :get-chart-box-config="getChartBoxConfig"
                   :get-chart-hit-area-config="getChartHitAreaConfig"
                   :get-chart-title-config="getChartTitleConfig"
@@ -738,6 +831,11 @@ export default {
                   :get-chart-area-config="getChartAreaConfig"
                   :get-chart-line-config="getChartLineConfig"
                   :get-chart-point-configs="getChartPointConfigs"
+                  :get-pie-chart-box-config="getPieChartBoxConfig"
+                  :get-pie-chart-background-config="getPieChartBackgroundConfig"
+                  :get-pie-chart-title-config="getPieChartTitleConfig"
+                  :get-pie-chart-slice-configs="getPieChartSliceConfigs"
+                  :get-pie-chart-label-configs="getPieChartLabelConfigs"
                   :get-shape-text-image-config="getShapeTextImageConfig"
                   @selectable-pointer-down="handleSelectablePointerDown"
                   @selectable-click="stopSelectableClick"
