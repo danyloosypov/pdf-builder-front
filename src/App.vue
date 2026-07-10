@@ -905,7 +905,13 @@ export default {
           @dragleave="handleImageDragLeave"
           @drop="handleImageDrop"
       >
-        <v-stage ref="stageRef" :config="stageConfig" @mousedown="handleStagePointerDown">
+        <v-stage
+            ref="stageRef"
+            :config="stageConfig"
+            @mousedown="handleStagePointerDown"
+            @mousemove="handleStagePointerMove"
+            @contextmenu="handleStageContextMenu"
+        >
           <v-layer>
             <v-rect :config="pageConfig" />
             <v-rect :config="pageMarginGuideConfig" />
@@ -969,6 +975,7 @@ export default {
                   :get-shape-text-image-config="getShapeTextImageConfig"
                   @selectable-pointer-down="handleSelectablePointerDown"
                   @selectable-click="stopSelectableClick"
+                  @selectable-context-menu="handleSelectableContextMenu"
                   @text-edit="startTextEditing"
                   @shape-text-edit="startShapeTextEditing"
                   @position-update="updatePosition"
@@ -988,6 +995,28 @@ export default {
             />
           </v-layer>
         </v-stage>
+
+        <div
+            v-if="contextMenu.visible"
+            class="canvas-context-menu"
+            :class="`canvas-context-menu--${contextMenu.type}`"
+            :style="contextMenuStyle"
+            @mousedown="handleContextMenuMouseDown"
+            @contextmenu.prevent
+        >
+          <template v-if="contextMenu.type === 'element'">
+            <button type="button" @click="copyContextMenuElement">Copy</button>
+            <button type="button" @click="deleteContextMenuElement">Delete</button>
+          </template>
+          <button
+              v-else
+              type="button"
+              :disabled="!canPasteCopiedItems"
+              @click="pasteContextMenuItems"
+          >
+            Paste
+          </button>
+        </div>
 
         <div
             v-if="editingItem && editor"

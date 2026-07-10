@@ -213,6 +213,15 @@ const isImportingLayout = ref(false)
 const layoutImportError = ref('')
 const layoutImportMessage = ref('')
 const copiedCanvasItems = ref([])
+const contextMenu = ref({
+  visible: false,
+  type: 'canvas',
+  targetId: null,
+  x: 0,
+  y: 0,
+  pastePoint: null
+})
+const lastCanvasPastePoint = ref(null)
 const richRenderVersions = new Map()
 let canvasVersion = 0
 let generatedCanvasIdCounter = 0
@@ -511,6 +520,12 @@ const selectedItems = computed(() => {
 
   return canvasItems.value.filter(item => selectedIdSet.has(item.id))
 })
+const canDeleteSelected = computed(() => selectedItems.value.length > 0)
+const canPasteCopiedItems = computed(() => copiedCanvasItems.value.length > 0 && !editingId.value)
+const contextMenuStyle = computed(() => ({
+  left: `${contextMenu.value.x}px`,
+  top: `${contextMenu.value.y}px`
+}))
 const selectedItem = computed(() => elements.value.find(i => i.id === selectedId.value) || null)
 const selectedLayerIndex = computed(() => canvasItems.value.findIndex(item => item.id === selectedId.value))
 const canMoveSelectedBackward = computed(() => selectedLayerIndex.value > 0)
@@ -812,6 +827,37 @@ function addBarcode() {
 
 function addText() {
   elements.value.push(new TextElement())
+}
+
+function addClipboardText(text, pastePoint = null) {
+  const value = String(text || '')
+
+  if (!value.trim()) return false
+
+  const bounds = getCanvasBounds()
+  const fontSize = 20
+  const lineHeight = 1.35
+  const lines = value.split(/\r\n|\r|\n/)
+  const longestLineLength = Math.max(1, ...lines.map(line => line.length))
+  const width = Math.min(420, Math.max(180, Math.round(longestLineLength * fontSize * 0.58) + 18))
+  const height = Math.max(40, Math.ceil(lines.length * fontSize * lineHeight) + 12)
+  const point = getCanvasPastePoint(pastePoint)
+  const id = Date.now()
+
+  elements.value.push(new TextElement({
+    id,
+    text: value,
+    x: clampNumber(point.x, bounds.x, Math.max(bounds.x, bounds.right - width)),
+    y: clampNumber(point.y, bounds.y, Math.max(bounds.y, bounds.bottom - height)),
+    width,
+    height,
+    fontSize,
+    lineHeight
+  }))
+
+  nextTick(() => selectElement(id))
+
+  return true
 }
 
 function isImageFile(file) {
@@ -3114,23 +3160,98 @@ function copySelectedCanvasItems() {
   return true
 }
 
-function preparePastedCanvasItem(item, offset, usedIds) {
+function getClipboardItemRect(item) {
+  const dimensions = getFallbackElementPixelDimensions(item)
+  let x = getItemCoordinate(item, 'x')
+  let y = getItemCoordinate(item, 'y')
+  let width = Math.max(1, Number(dimensions?.width) || 1)
+  let height = Math.max(1, Number(dimensions?.height) || 1)
+
+  if (item?.type === 'circle' || regularPolygonShapeTypes.includes(item?.type)) {
+    const radius = Number(item.radius) || 0
+
+    x -= radius
+    y -= radius
+  }
+
+  if (item?.type === 'line' || item?.type === 'arrow') {
+    const bounds = getLineLocalBounds(item)
+
+    x += bounds.minX
+    y += bounds.minY
+    width = bounds.width
+    height = bounds.height
+  }
+
+  return {
+    x,
+    y,
+    width,
+    height,
+    right: x + width,
+    bottom: y + height
+  }
+}
+
+function getClipboardItemsBounds(items) {
+  const rects = items.map(getClipboardItemRect).filter(Boolean)
+
+  if (!rects.length) return null
+
+  const x = Math.min(...rects.map(rect => rect.x))
+  const y = Math.min(...rects.map(rect => rect.y))
+  const right = Math.max(...rects.map(rect => rect.right))
+  const bottom = Math.max(...rects.map(rect => rect.bottom))
+
+  return {
+    x,
+    y,
+    right,
+    bottom,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y)
+  }
+}
+
+function getPasteDelta(options = {}) {
+  const pastePoint = options.pastePoint
+
+  if (pastePoint && copiedCanvasItems.value.length) {
+    const bounds = getClipboardItemsBounds(copiedCanvasItems.value)
+
+    if (bounds) {
+      return {
+        x: getItemCoordinate(pastePoint, 'x') - bounds.x,
+        y: getItemCoordinate(pastePoint, 'y') - bounds.y
+      }
+    }
+  }
+
+  const pasteOffset = CLIPBOARD_PASTE_OFFSET * (clipboardPasteCount + 1)
+
+  return {
+    x: pasteOffset,
+    y: pasteOffset
+  }
+}
+
+function preparePastedCanvasItem(item, delta, usedIds) {
   const pastedItem = cloneCanvasItem(item)
 
   assignClonedCanvasItemIds(pastedItem, usedIds)
-  moveCanvasItemByDelta(pastedItem, offset, offset)
+  moveCanvasItemByDelta(pastedItem, delta.x, delta.y)
   ensureImportedElementSettings(pastedItem)
 
   return pastedItem
 }
 
-function pasteCopiedCanvasItems() {
+function pasteCopiedCanvasItems(options = {}) {
   if (editingId.value || !copiedCanvasItems.value.length) return false
 
   const usedIds = collectCanvasItemIds(elements.value)
-  const pasteOffset = CLIPBOARD_PASTE_OFFSET * (clipboardPasteCount + 1)
+  const pasteDelta = getPasteDelta(options)
   const pastedItems = copiedCanvasItems.value.map(item => (
-    preparePastedCanvasItem(item, pasteOffset, usedIds)
+    preparePastedCanvasItem(item, pasteDelta, usedIds)
   ))
 
   elements.value = [...elements.value, ...pastedItems]
@@ -3143,6 +3264,277 @@ function pasteCopiedCanvasItems() {
   })
 
   return true
+}
+
+function hideContextMenu() {
+  if (!contextMenu.value.visible) return
+
+  contextMenu.value = {
+    ...contextMenu.value,
+    visible: false,
+    targetId: null,
+    pastePoint: null
+  }
+}
+
+function getStageLocalPointFromPointerEvent(event) {
+  const stage = getStageNode()
+  const nativeEvent = event?.evt || event
+  const container = stage?.container?.()
+  const rect = container?.getBoundingClientRect?.()
+
+  if (!rect || typeof nativeEvent?.clientX !== 'number' || typeof nativeEvent?.clientY !== 'number') {
+    return { x: 0, y: 0 }
+  }
+
+  return {
+    x: nativeEvent.clientX - rect.left,
+    y: nativeEvent.clientY - rect.top
+  }
+}
+
+function getStagePointerPosition(event) {
+  const stage = getStageNode()
+
+  if (stage && event?.evt && typeof stage.setPointersPositions === 'function') {
+    stage.setPointersPositions(event.evt)
+  }
+
+  return stage?.getPointerPosition?.() || getStageLocalPointFromPointerEvent(event)
+}
+
+function getDefaultCanvasPastePoint() {
+  const bounds = getCanvasBounds()
+
+  return {
+    x: bounds.x + 40,
+    y: bounds.y + 40
+  }
+}
+
+function getClampedCanvasPastePoint(point) {
+  const bounds = getCanvasBounds()
+
+  if (!point) return getDefaultCanvasPastePoint()
+
+  return {
+    x: clampNumber(point.x, bounds.x, bounds.right),
+    y: clampNumber(point.y, bounds.y, bounds.bottom)
+  }
+}
+
+function setLastCanvasPastePoint(point) {
+  lastCanvasPastePoint.value = getClampedCanvasPastePoint(point)
+}
+
+function getCanvasPastePoint(point = null) {
+  return getClampedCanvasPastePoint(point || contextMenu.value.pastePoint || lastCanvasPastePoint.value)
+}
+
+function handleStagePointerMove(event) {
+  setLastCanvasPastePoint(getStagePointerPosition(event))
+}
+
+function getContextMenuPosition(x, y, type = 'canvas') {
+  const menuWidth = type === 'element' ? 126 : 92
+  const menuHeight = type === 'element' ? 76 : 42
+
+  return {
+    x: clampNumber(x, 0, Math.max(0, stageConfig.value.width - menuWidth)),
+    y: clampNumber(y, 0, Math.max(0, stageConfig.value.height - menuHeight))
+  }
+}
+
+function getElementContextMenuPosition(itemId, event) {
+  const node = nodeRefs.value[itemId]
+  const rect = node?.getClientRect?.()
+
+  if (!rect) {
+    const point = getStageLocalPointFromPointerEvent(event)
+
+    return getContextMenuPosition(point.x + 8, point.y, 'element')
+  }
+
+  return getContextMenuPosition(rect.x + rect.width + 8, rect.y, 'element')
+}
+
+function getCanvasItemIdFromKonvaTarget(target) {
+  if (!target) return null
+
+  const layerItems = [...canvasItems.value].reverse()
+
+  for (const item of layerItems) {
+    const node = nodeRefs.value[item.id]
+
+    if (!node) continue
+    if (node === target || node.isAncestorOf?.(target)) return item.id
+  }
+
+  return null
+}
+
+function showElementContextMenu(itemId, event) {
+  if (editingId.value && editingId.value !== itemId) {
+    finishTextEditing()
+  }
+
+  setLastCanvasPastePoint(getStagePointerPosition(event))
+  selectElement(itemId)
+
+  const position = getElementContextMenuPosition(itemId, event)
+
+  contextMenu.value = {
+    visible: true,
+    type: 'element',
+    targetId: itemId,
+    x: position.x,
+    y: position.y,
+    pastePoint: null
+  }
+}
+
+function showCanvasContextMenu(event) {
+  const point = getStagePointerPosition(event)
+  const position = getContextMenuPosition(point.x + 8, point.y + 8, 'canvas')
+
+  setLastCanvasPastePoint(point)
+
+  contextMenu.value = {
+    visible: true,
+    type: 'canvas',
+    targetId: null,
+    x: position.x,
+    y: position.y,
+    pastePoint: point
+  }
+}
+
+function handleStageContextMenu(event) {
+  const nativeEvent = event?.evt
+
+  nativeEvent?.preventDefault?.()
+  nativeEvent?.stopPropagation?.()
+
+  const itemId = getCanvasItemIdFromKonvaTarget(event?.target)
+
+  if (itemId !== null && itemId !== undefined) {
+    showElementContextMenu(itemId, event)
+    return
+  }
+
+  showCanvasContextMenu(event)
+}
+
+function handleSelectableContextMenu(event, itemId) {
+  const nativeEvent = event?.evt
+
+  nativeEvent?.preventDefault?.()
+  nativeEvent?.stopPropagation?.()
+
+  event.cancelBubble = true
+  showElementContextMenu(itemId, event)
+}
+
+function copyContextMenuElement() {
+  const itemId = contextMenu.value.targetId
+
+  if (itemId === null || itemId === undefined) return false
+
+  selectElement(itemId)
+  const copied = copySelectedCanvasItems()
+
+  hideContextMenu()
+
+  return copied
+}
+
+function deleteContextMenuElement() {
+  const itemId = contextMenu.value.targetId
+
+  if (itemId === null || itemId === undefined) return false
+
+  selectElement(itemId)
+  const deleted = deleteSelectedElements()
+
+  hideContextMenu()
+
+  return deleted
+}
+
+function pasteContextMenuItems() {
+  const pasted = pasteCopiedCanvasItems({
+    pastePoint: contextMenu.value.pastePoint
+  })
+
+  hideContextMenu()
+
+  return pasted
+}
+
+function handleContextMenuMouseDown(event) {
+  event.stopPropagation()
+}
+
+function handleGlobalMouseDown(event) {
+  if (!contextMenu.value.visible) return
+  if (event.target?.closest?.('.canvas-context-menu')) return
+
+  hideContextMenu()
+}
+
+function getClipboardImageFile(clipboardData) {
+  const files = Array.from(clipboardData?.files || [])
+  const file = getFirstImageFile(files)
+
+  if (file) return file
+
+  return Array.from(clipboardData?.items || [])
+    .find(item => item.kind === 'file' && item.type.startsWith('image/'))
+    ?.getAsFile?.() || null
+}
+
+function getClipboardPlainText(clipboardData) {
+  return clipboardData?.getData?.('text/plain') || ''
+}
+
+function pasteExternalClipboardImage(file) {
+  if (!isImageFile(file)) return false
+
+  addUploadedImage(file, getCanvasPastePoint())
+
+  return true
+}
+
+function pasteExternalClipboardText(text) {
+  return addClipboardText(text, getCanvasPastePoint())
+}
+
+function handleGlobalPaste(event) {
+  if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
+
+  const clipboardData = event.clipboardData
+  let handled = false
+  const imageFile = getClipboardImageFile(clipboardData)
+
+  if (imageFile) {
+    handled = pasteExternalClipboardImage(imageFile)
+  } else {
+    const text = getClipboardPlainText(clipboardData)
+
+    handled = pasteExternalClipboardText(text)
+  }
+
+  if (!handled) {
+    handled = pasteCopiedCanvasItems({
+      pastePoint: getCanvasPastePoint()
+    })
+  }
+
+  if (!handled) return
+
+  hideContextMenu()
+  event.preventDefault()
+  event.stopPropagation()
 }
 
 function isEditableKeyboardTarget(target) {
@@ -3159,14 +3551,32 @@ function isEditableKeyboardTarget(target) {
 }
 
 function handleGlobalClipboardKeyDown(event) {
+  if (contextMenu.value.visible && event.key === 'Escape') {
+    hideContextMenu()
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
   if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
-  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
 
   const key = String(event.key || '').toLowerCase()
+
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+    const handled = ['delete', 'backspace'].includes(key) && deleteSelectedElements()
+
+    if (!handled) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+
   let handled = false
 
   if (key === 'c') handled = copySelectedCanvasItems()
-  if (key === 'v') handled = pasteCopiedCanvasItems()
 
   if (!handled) return
 
@@ -3390,6 +3800,27 @@ function clearCanvas() {
   editingTextTarget.value = 'text'
   richRenderVersions.clear()
   clearSelection()
+}
+
+function deleteSelectedElements() {
+  if (!selectedIds.value.length) return false
+
+  const selectedIdSet = new Set(selectedIds.value)
+
+  elements.value = elements.value.filter(item => !selectedIdSet.has(item.id))
+
+  selectedIdSet.forEach(id => {
+    delete nodeRefs.value[id]
+  })
+
+  if (selectedIdSet.has(editingId.value)) {
+    editingId.value = null
+    editingTextTarget.value = 'text'
+  }
+
+  clearSelection()
+
+  return true
 }
 
 function isNodeOutsideCanvas(node) {
@@ -3690,6 +4121,10 @@ function startShapeTextEditing(item) {
 }
 
 function handleStagePointerDown(event) {
+  setLastCanvasPastePoint(getStagePointerPosition(event))
+
+  if (contextMenu.value.visible) hideContextMenu()
+
   const target = event.target
   const isEditingTarget = isTargetInsideNode(target, nodeRefs.value[editingId.value])
 
@@ -4793,10 +5228,14 @@ async function importLayoutFile(event) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalClipboardKeyDown)
+  window.addEventListener('paste', handleGlobalPaste)
+  window.addEventListener('mousedown', handleGlobalMouseDown)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalClipboardKeyDown)
+  window.removeEventListener('paste', handleGlobalPaste)
+  window.removeEventListener('mousedown', handleGlobalMouseDown)
 })
 
   return {
@@ -4861,6 +5300,8 @@ onBeforeUnmount(() => {
     isPdfExporting,
     pdfExportError,
     copiedCanvasItems,
+    contextMenu,
+    lastCanvasPastePoint,
     richRenderVersions,
     canvasVersion,
     defaultImageSettings,
@@ -4902,6 +5343,9 @@ onBeforeUnmount(() => {
     layerSidebarItems,
     tableItems,
     selectedItems,
+    canDeleteSelected,
+    canPasteCopiedItems,
+    contextMenuStyle,
     selectedItem,
     selectedLayerIndex,
     canMoveSelectedBackward,
@@ -5135,8 +5579,36 @@ onBeforeUnmount(() => {
     assignClonedCanvasItemIds,
     getSelectedCanvasItemsForClipboard,
     copySelectedCanvasItems,
+    getClipboardItemRect,
+    getClipboardItemsBounds,
+    getPasteDelta,
     preparePastedCanvasItem,
     pasteCopiedCanvasItems,
+    hideContextMenu,
+    getStageLocalPointFromPointerEvent,
+    getStagePointerPosition,
+    getDefaultCanvasPastePoint,
+    getClampedCanvasPastePoint,
+    setLastCanvasPastePoint,
+    getCanvasPastePoint,
+    handleStagePointerMove,
+    getContextMenuPosition,
+    getElementContextMenuPosition,
+    getCanvasItemIdFromKonvaTarget,
+    showElementContextMenu,
+    showCanvasContextMenu,
+    handleStageContextMenu,
+    handleSelectableContextMenu,
+    copyContextMenuElement,
+    deleteContextMenuElement,
+    pasteContextMenuItems,
+    handleContextMenuMouseDown,
+    handleGlobalMouseDown,
+    getClipboardImageFile,
+    getClipboardPlainText,
+    pasteExternalClipboardImage,
+    pasteExternalClipboardText,
+    handleGlobalPaste,
     isEditableKeyboardTarget,
     handleGlobalClipboardKeyDown,
     ensureSelectableItemSettings,
@@ -5157,6 +5629,7 @@ onBeforeUnmount(() => {
     groupSelectedElements,
     ungroupSelectedGroup,
     clearCanvas,
+    deleteSelectedElements,
     isNodeOutsideCanvas,
     removeElement,
     removeElementIfOutsideCanvas,

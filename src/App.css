@@ -604,6 +604,45 @@
   background: rgb(37 99 235 / 8%);
 }
 
+.canvas-context-menu {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  min-width: 92px;
+  padding: 4px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgb(15 23 42 / 18%);
+}
+
+.canvas-context-menu button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: #0f172a;
+  background: transparent;
+  font: 13px Arial;
+  text-align: left;
+  cursor: pointer;
+}
+
+.canvas-context-menu button:hover,
+.canvas-context-menu button:focus-visible {
+  background: #eff6ff;
+  outline: none;
+}
+
+.canvas-context-menu button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.canvas-context-menu button:disabled:hover {
+  background: transparent;
+}
+
 .rich-text-editor {
   position: absolute;
   z-index: 10;
