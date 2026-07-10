@@ -216,6 +216,7 @@ const copiedCanvasItems = ref([])
 const contextMenu = ref({
   visible: false,
   type: 'canvas',
+  positionMode: 'stage',
   targetId: null,
   x: 0,
   y: 0,
@@ -522,10 +523,18 @@ const selectedItems = computed(() => {
 })
 const canDeleteSelected = computed(() => selectedItems.value.length > 0)
 const canPasteCopiedItems = computed(() => copiedCanvasItems.value.length > 0 && !editingId.value)
-const contextMenuStyle = computed(() => ({
-  left: `${contextMenu.value.x}px`,
-  top: `${contextMenu.value.y}px`
-}))
+const contextMenuStyle = computed(() => {
+  const style = {
+    left: `${contextMenu.value.x}px`,
+    top: `${contextMenu.value.y}px`
+  }
+
+  if (contextMenu.value.positionMode === 'viewport') {
+    style.position = 'fixed'
+  }
+
+  return style
+})
 const selectedItem = computed(() => elements.value.find(i => i.id === selectedId.value) || null)
 const selectedLayerIndex = computed(() => canvasItems.value.findIndex(item => item.id === selectedId.value))
 const canMoveSelectedBackward = computed(() => selectedLayerIndex.value > 0)
@@ -3335,13 +3344,29 @@ function handleStagePointerMove(event) {
   setLastCanvasPastePoint(getStagePointerPosition(event))
 }
 
+function getContextMenuSize(type = 'canvas') {
+  return type === 'element'
+    ? { width: 126, height: 76 }
+    : { width: 92, height: 42 }
+}
+
 function getContextMenuPosition(x, y, type = 'canvas') {
-  const menuWidth = type === 'element' ? 126 : 92
-  const menuHeight = type === 'element' ? 76 : 42
+  const { width, height } = getContextMenuSize(type)
 
   return {
-    x: clampNumber(x, 0, Math.max(0, stageConfig.value.width - menuWidth)),
-    y: clampNumber(y, 0, Math.max(0, stageConfig.value.height - menuHeight))
+    x: clampNumber(x, 0, Math.max(0, stageConfig.value.width - width)),
+    y: clampNumber(y, 0, Math.max(0, stageConfig.value.height - height))
+  }
+}
+
+function getViewportContextMenuPosition(x, y, type = 'canvas') {
+  const { width, height } = getContextMenuSize(type)
+  const viewportWidth = typeof window === 'undefined' ? width : window.innerWidth
+  const viewportHeight = typeof window === 'undefined' ? height : window.innerHeight
+
+  return {
+    x: clampNumber(x, 0, Math.max(0, viewportWidth - width)),
+    y: clampNumber(y, 0, Math.max(0, viewportHeight - height))
   }
 }
 
@@ -3386,6 +3411,7 @@ function showElementContextMenu(itemId, event) {
   contextMenu.value = {
     visible: true,
     type: 'element',
+    positionMode: 'stage',
     targetId: itemId,
     x: position.x,
     y: position.y,
@@ -3402,6 +3428,7 @@ function showCanvasContextMenu(event) {
   contextMenu.value = {
     visible: true,
     type: 'canvas',
+    positionMode: 'stage',
     targetId: null,
     x: position.x,
     y: position.y,
@@ -3636,6 +3663,31 @@ function selectLayerSidebarItem(item) {
   }
 
   selectElement(item.id)
+}
+
+function handleLayerContextMenu(event, item) {
+  if (!item) return
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  if (editingId.value && editingId.value !== item.id) {
+    finishTextEditing()
+  }
+
+  selectElement(item.id)
+
+  const position = getViewportContextMenuPosition(event.clientX + 8, event.clientY + 8, 'element')
+
+  contextMenu.value = {
+    visible: true,
+    type: 'element',
+    positionMode: 'viewport',
+    targetId: item.id,
+    x: position.x,
+    y: position.y,
+    pastePoint: null
+  }
 }
 
 function handleLayerDragStart(event, item) {
@@ -5592,7 +5644,9 @@ onBeforeUnmount(() => {
     setLastCanvasPastePoint,
     getCanvasPastePoint,
     handleStagePointerMove,
+    getContextMenuSize,
     getContextMenuPosition,
+    getViewportContextMenuPosition,
     getElementContextMenuPosition,
     getCanvasItemIdFromKonvaTarget,
     showElementContextMenu,
@@ -5616,6 +5670,7 @@ onBeforeUnmount(() => {
     selectElements,
     selectElement,
     selectLayerSidebarItem,
+    handleLayerContextMenu,
     handleLayerDragStart,
     handleLayerDragOver,
     handleLayerDragLeave,

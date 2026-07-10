@@ -291,6 +291,7 @@ export default {
               role="button"
               tabindex="0"
               @click="selectLayerSidebarItem(entry.item)"
+              @contextmenu="handleLayerContextMenu($event, entry.item)"
               @keydown.enter.prevent="selectLayerSidebarItem(entry.item)"
               @keydown.space.prevent="selectLayerSidebarItem(entry.item)"
               @dragstart="handleLayerDragStart($event, entry.item)"
@@ -997,7 +998,7 @@ export default {
         </v-stage>
 
         <div
-            v-if="contextMenu.visible"
+            v-if="contextMenu.visible && contextMenu.positionMode !== 'viewport'"
             class="canvas-context-menu"
             :class="`canvas-context-menu--${contextMenu.type}`"
             :style="contextMenuStyle"
@@ -1114,6 +1115,18 @@ export default {
           <EditorContent :editor="editor" />
         </div>
       </div>
+    </div>
+
+    <div
+        v-if="contextMenu.visible && contextMenu.positionMode === 'viewport'"
+        class="canvas-context-menu"
+        :class="`canvas-context-menu--${contextMenu.type}`"
+        :style="contextMenuStyle"
+        @mousedown="handleContextMenuMouseDown"
+        @contextmenu.prevent
+    >
+      <button type="button" @click="copyContextMenuElement">Copy</button>
+      <button type="button" @click="deleteContextMenuElement">Delete</button>
     </div>
   </div>
 </template>
