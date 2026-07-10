@@ -940,6 +940,44 @@ export default {
           @dragleave="handleImageDragLeave"
           @drop="handleImageDrop"
       >
+        <div
+            class="canvas-ruler-corner"
+            :style="canvasRulerCornerStyle"
+            aria-hidden="true"
+        >
+          {{ rulerUnitLabel }}
+        </div>
+        <div
+            class="canvas-ruler canvas-ruler--horizontal"
+            :style="canvasRulerHorizontalStyle"
+            aria-hidden="true"
+        >
+          <span
+              v-for="tick in horizontalRulerTicks"
+              :key="tick.key"
+              class="canvas-ruler-tick"
+              :class="{ major: tick.isMajor, mid: tick.isMid }"
+              :style="{ left: `${tick.offset}px` }"
+          >
+            <span v-if="tick.label" class="canvas-ruler-label">{{ tick.label }}</span>
+          </span>
+        </div>
+        <div
+            class="canvas-ruler canvas-ruler--vertical"
+            :style="canvasRulerVerticalStyle"
+            aria-hidden="true"
+        >
+          <span
+              v-for="tick in verticalRulerTicks"
+              :key="tick.key"
+              class="canvas-ruler-tick"
+              :class="{ major: tick.isMajor, mid: tick.isMid }"
+              :style="{ top: `${tick.offset}px` }"
+          >
+            <span v-if="tick.label" class="canvas-ruler-label">{{ tick.label }}</span>
+          </span>
+        </div>
+
         <v-stage
             ref="stageRef"
             :config="stageConfig"

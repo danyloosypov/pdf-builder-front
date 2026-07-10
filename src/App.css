@@ -657,6 +657,86 @@
   height: 1100px;
 }
 
+.canvas-ruler,
+.canvas-ruler-corner {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  pointer-events: none;
+  user-select: none;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font: 10px Arial;
+}
+
+.canvas-ruler-corner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: lowercase;
+}
+
+.canvas-ruler--horizontal {
+  border-bottom-color: #94a3b8;
+}
+
+.canvas-ruler--vertical {
+  border-right-color: #94a3b8;
+}
+
+.canvas-ruler-tick {
+  position: absolute;
+  background: #64748b;
+}
+
+.canvas-ruler--horizontal .canvas-ruler-tick {
+  bottom: 0;
+  width: 1px;
+  height: 6px;
+}
+
+.canvas-ruler--horizontal .canvas-ruler-tick.mid {
+  height: 10px;
+}
+
+.canvas-ruler--horizontal .canvas-ruler-tick.major {
+  height: 15px;
+}
+
+.canvas-ruler--vertical .canvas-ruler-tick {
+  right: 0;
+  width: 6px;
+  height: 1px;
+}
+
+.canvas-ruler--vertical .canvas-ruler-tick.mid {
+  width: 10px;
+}
+
+.canvas-ruler--vertical .canvas-ruler-tick.major {
+  width: 15px;
+}
+
+.canvas-ruler-label {
+  position: absolute;
+  color: #334155;
+  line-height: 1;
+  background: transparent;
+}
+
+.canvas-ruler--horizontal .canvas-ruler-label {
+  top: -7px;
+  left: 3px;
+}
+
+.canvas-ruler--vertical .canvas-ruler-label {
+  top: -5px;
+  right: 17px;
+  transform: rotate(-90deg);
+  transform-origin: right center;
+}
+
 .stage-shell::after {
   content: '';
   position: absolute;

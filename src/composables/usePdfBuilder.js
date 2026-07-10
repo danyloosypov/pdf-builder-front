@@ -194,6 +194,34 @@ const stageShellStyle = computed(() => ({
   width: `${stageConfig.value.width}px`,
   height: `${stageConfig.value.height}px`
 }))
+const rulerSize = 24
+const rulerUnitPixels = computed(() => (
+  pageUnit.value === 'cm'
+    ? PX_PER_INCH / CM_PER_INCH
+    : PX_PER_INCH
+))
+const rulerMinorDivisions = computed(() => pageUnit.value === 'cm' ? 10 : 8)
+const rulerUnitLabel = computed(() => pageUnit.value)
+const canvasRulerCornerStyle = computed(() => ({
+  left: `${PAGE_OFFSET_X - rulerSize}px`,
+  top: `${PAGE_OFFSET_Y - rulerSize}px`,
+  width: `${rulerSize}px`,
+  height: `${rulerSize}px`
+}))
+const canvasRulerHorizontalStyle = computed(() => ({
+  left: `${PAGE_OFFSET_X}px`,
+  top: `${PAGE_OFFSET_Y - rulerSize}px`,
+  width: `${pagePixelSize.value.width}px`,
+  height: `${rulerSize}px`
+}))
+const canvasRulerVerticalStyle = computed(() => ({
+  left: `${PAGE_OFFSET_X - rulerSize}px`,
+  top: `${PAGE_OFFSET_Y}px`,
+  width: `${rulerSize}px`,
+  height: `${pagePixelSize.value.height}px`
+}))
+const horizontalRulerTicks = computed(() => getRulerTicks(pagePixelSize.value.width))
+const verticalRulerTicks = computed(() => getRulerTicks(pagePixelSize.value.height))
 
 const selectedId = ref(null)
 const selectedIds = ref([])
@@ -1113,6 +1141,27 @@ function clampNumber(value, min, max) {
   if (!Number.isFinite(numericValue)) return min
 
   return Math.min(Math.max(numericValue, min), max)
+}
+
+function getRulerTicks(length) {
+  const unitPixels = rulerUnitPixels.value
+  const minorDivisions = rulerMinorDivisions.value
+  const minorPixels = unitPixels / minorDivisions
+  const tickCount = Math.floor(length / minorPixels)
+
+  return Array.from({ length: tickCount + 1 }, (_, index) => {
+    const isMajor = index % minorDivisions === 0
+    const isMid = !isMajor && index % (minorDivisions / 2) === 0
+    const value = index / minorDivisions
+
+    return {
+      key: `${pageUnit.value}-${index}`,
+      offset: Math.min(length, Number((index * minorPixels).toFixed(2))),
+      isMajor,
+      isMid,
+      label: isMajor ? String(value) : ''
+    }
+  })
 }
 
 function formatPageDimension(value) {
@@ -5340,6 +5389,15 @@ onBeforeUnmount(() => {
     pageClipConfig,
     stageConfig,
     stageShellStyle,
+    rulerSize,
+    rulerUnitPixels,
+    rulerMinorDivisions,
+    rulerUnitLabel,
+    canvasRulerCornerStyle,
+    canvasRulerHorizontalStyle,
+    canvasRulerVerticalStyle,
+    horizontalRulerTicks,
+    verticalRulerTicks,
     selectedId,
     selectedIds,
     stageRef,
@@ -5465,6 +5523,7 @@ onBeforeUnmount(() => {
     addTable,
     setRef,
     clampNumber,
+    getRulerTicks,
     formatPageDimension,
     convertInchesToPageUnit,
     getPageUnitInches,
