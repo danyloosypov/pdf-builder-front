@@ -71,6 +71,75 @@
   display: none;
 }
 
+.element-tabs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.element-tab-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.element-tab-list button,
+.element-button-grid button,
+.element-tab-stack > button {
+  min-height: 30px;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  color: #0f172a;
+  background: #f8fafc;
+  font: 12px Arial;
+  text-align: left;
+  cursor: pointer;
+}
+
+.element-tab-list button {
+  color: #475569;
+  background: #ffffff;
+}
+
+.element-tab-list button.active {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-weight: 700;
+}
+
+.element-tab-list button:hover,
+.element-tab-list button:focus-visible,
+.element-button-grid button:hover,
+.element-button-grid button:focus-visible,
+.element-tab-stack > button:hover,
+.element-tab-stack > button:focus-visible {
+  border-color: #94a3b8;
+  outline: none;
+}
+
+.element-tab-content {
+  min-height: 30px;
+}
+
+.element-button-grid,
+.element-tab-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.element-upload-button {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .qr-panel,
 .barcode-panel {
   display: flex;

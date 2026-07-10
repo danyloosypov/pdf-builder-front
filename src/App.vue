@@ -158,69 +158,103 @@ export default {
         </div>
       </div>
 
-      <button @click="addText">Text</button>
-      <label class="file-upload-button">
-        Upload Image
-        <input type="file" accept="image/*" @change="uploadImage">
-      </label>
+      <div class="element-tabs-panel">
+        <div class="panel-title">Элементы</div>
 
-      <div class="qr-panel">
-        <label class="control-row">
-          <span>QR Link</span>
-          <input
-              v-model="qrLink"
-              class="qr-link-input"
-              type="url"
-              placeholder="https://example.com"
-              @input="qrError = ''"
-              @keydown.enter.prevent="addQR"
+        <div class="element-tab-list" role="tablist" aria-label="Element categories">
+          <button
+              v-for="tab in sidebarElementTabs"
+              :key="tab.id"
+              type="button"
+              role="tab"
+              :class="{ active: activeSidebarElementTab === tab.id }"
+              :aria-selected="activeSidebarElementTab === tab.id"
+              :tabindex="activeSidebarElementTab === tab.id ? 0 : -1"
+              @click="activeSidebarElementTab = tab.id"
           >
-        </label>
-        <button
-            type="button"
-            :disabled="!qrLink.trim()"
-            @click="addQR"
-        >
-          QR Code
-        </button>
-        <p v-if="qrError" class="field-error">{{ qrError }}</p>
-      </div>
+            {{ tab.label }}
+          </button>
+        </div>
 
-      <div class="barcode-panel">
-        <label class="control-row">
-          <span>Barcode Value</span>
-          <input
-              v-model="barcodeValue"
-              class="barcode-value-input"
-              type="text"
-              :maxlength="BARCODE_MAX_LENGTH"
-              placeholder="ABC-12345"
-              autocomplete="off"
-              @input="barcodeError = ''"
-              @keydown.enter.prevent="addBarcode"
-          >
-        </label>
-        <button
-            type="button"
-            :disabled="!barcodeValue.trim()"
-            @click="addBarcode"
-        >
-          Barcode
-        </button>
-        <p v-if="barcodeError" class="field-error">{{ barcodeError }}</p>
-      </div>
+        <div class="element-tab-content">
+          <div v-if="activeSidebarElementTab === 'text'" class="element-button-grid">
+            <button type="button" @click="addText">Text</button>
+            <button type="button" @click="addLabel">Label</button>
+          </div>
 
-      <button @click="addRect">Rect</button>
-      <button @click="addCircle">Circle</button>
-      <button @click="addTriangle">Triangle</button>
-      <button @click="addRightTriangle">Right Triangle</button>
-      <button @click="addPolygon">Polygon</button>
-      <button @click="addChart">Graph</button>
-      <button @click="addPieChart">Pie Chart</button>
-      <button @click="addLine">Line</button>
-      <button @click="addArrow">Arrow</button>
-      <button @click="addLabel">Label</button>
-      <button @click="addTable">Table</button>
+          <div v-else-if="activeSidebarElementTab === 'shapes'" class="element-button-grid">
+            <button type="button" @click="addRect">Rect</button>
+            <button type="button" @click="addTriangle">Triangle</button>
+            <button type="button" @click="addCircle">Circle</button>
+            <button type="button" @click="addRightTriangle">Right Triangle</button>
+            <button type="button" @click="addArrow">Arrow</button>
+            <button type="button" @click="addLine">Line</button>
+            <button type="button" @click="addPolygon">Polygon</button>
+          </div>
+
+          <div v-else-if="activeSidebarElementTab === 'charts'" class="element-button-grid">
+            <button type="button" @click="addChart">Graph</button>
+            <button type="button" @click="addPieChart">Pie Chart</button>
+          </div>
+
+          <div v-else-if="activeSidebarElementTab === 'images'" class="element-button-grid">
+            <label class="file-upload-button element-upload-button">
+              Upload Image
+              <input type="file" accept="image/*" @change="uploadImage">
+            </label>
+          </div>
+
+          <div v-else class="element-tab-stack">
+            <div class="qr-panel">
+              <label class="control-row">
+                <span>QR Link</span>
+                <input
+                    v-model="qrLink"
+                    class="qr-link-input"
+                    type="url"
+                    placeholder="https://example.com"
+                    @input="qrError = ''"
+                    @keydown.enter.prevent="addQR"
+                >
+              </label>
+              <button
+                  type="button"
+                  :disabled="!qrLink.trim()"
+                  @click="addQR"
+              >
+                QR Code
+              </button>
+              <p v-if="qrError" class="field-error">{{ qrError }}</p>
+            </div>
+
+            <div class="barcode-panel">
+              <label class="control-row">
+                <span>Barcode Value</span>
+                <input
+                    v-model="barcodeValue"
+                    class="barcode-value-input"
+                    type="text"
+                    :maxlength="BARCODE_MAX_LENGTH"
+                    placeholder="ABC-12345"
+                    autocomplete="off"
+                    @input="barcodeError = ''"
+                    @keydown.enter.prevent="addBarcode"
+                >
+              </label>
+              <button
+                  type="button"
+                  :disabled="!barcodeValue.trim()"
+                  @click="addBarcode"
+              >
+                Barcode
+              </button>
+              <p v-if="barcodeError" class="field-error">{{ barcodeError }}</p>
+            </div>
+
+            <button type="button" @click="addTable">Table</button>
+          </div>
+        </div>
+      </div>
       <button
           class="export-pdf-button"
           type="button"

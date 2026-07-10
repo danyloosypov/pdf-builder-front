@@ -202,6 +202,14 @@ const transformerRef = ref(null)
 const nodeRefs = ref({})
 const editingId = ref(null)
 const editingTextTarget = ref('text')
+const activeSidebarElementTab = ref('text')
+const sidebarElementTabs = [
+  { id: 'text', label: 'Текстовые элементы' },
+  { id: 'shapes', label: 'Фигуры' },
+  { id: 'charts', label: 'Диаграммы' },
+  { id: 'images', label: 'Изображения' },
+  { id: 'other', label: 'Другое' }
+]
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
 const isImageDragActive = ref(false)
@@ -5339,6 +5347,8 @@ onBeforeUnmount(() => {
     nodeRefs,
     editingId,
     editingTextTarget,
+    activeSidebarElementTab,
+    sidebarElementTabs,
     draggedLayerId,
     dragOverLayerId,
     isImageDragActive,
