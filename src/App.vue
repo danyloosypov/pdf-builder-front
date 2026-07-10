@@ -222,6 +222,15 @@ export default {
       <button @click="addLabel">Label</button>
       <button @click="addTable">Table</button>
       <button
+          class="export-pdf-button"
+          type="button"
+          :disabled="isPdfExporting"
+          @click="exportCurrentLayoutAsPdf"
+      >
+        {{ isPdfExporting ? 'Exporting PDF...' : 'Export to PDF' }}
+      </button>
+      <p v-if="pdfExportError" class="field-error">{{ pdfExportError }}</p>
+      <button
           class="export-layout-button"
           type="button"
           @click="exportLayoutWithImagesAsJson"
@@ -464,6 +473,32 @@ export default {
           >
         </label>
 
+        <div class="chart-color-grid">
+          <label>
+            <span>Border</span>
+            <input v-model="selectedText.borderColor" type="color">
+          </label>
+        </div>
+
+        <label class="control-row">
+          <span>Border Width</span>
+          <input v-model.number="selectedText.borderWidth" type="range" min="0" max="24" step="1">
+          <input v-model.number="selectedText.borderWidth" class="number-input" type="number" min="0" max="24" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedText.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
         <div class="selection-button-grid">
           <button type="button" @click="toggleTextCase(selectedText)">Toggle Case</button>
         </div>
@@ -524,7 +559,30 @@ export default {
             <span>Background</span>
             <input v-model="selectedLabel.tag.fill" type="color">
           </label>
+          <label>
+            <span>Border</span>
+            <input v-model="selectedLabel.borderColor" type="color">
+          </label>
         </div>
+
+        <label class="control-row">
+          <span>Border Width</span>
+          <input v-model.number="selectedLabel.borderWidth" type="range" min="0" max="24" step="1">
+          <input v-model.number="selectedLabel.borderWidth" class="number-input" type="number" min="0" max="24" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedLabel.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
 
         <label class="control-row">
           <span>Opacity</span>
@@ -564,6 +622,19 @@ export default {
               max="24"
               step="1"
           >
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedShape.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
         </label>
 
         <div v-if="canShapeHaveCornerRadius(selectedShape)" class="control-row">
@@ -620,6 +691,32 @@ export default {
           <span>Opacity</span>
           <input v-model.number="selectedImage.opacity" type="range" min="0" max="1" step="0.05">
           <input v-model.number="selectedImage.opacity" class="number-input" type="number" min="0" max="1" step="0.05">
+        </label>
+
+        <div class="chart-color-grid">
+          <label>
+            <span>Border</span>
+            <input v-model="selectedImage.borderColor" type="color">
+          </label>
+        </div>
+
+        <label class="control-row">
+          <span>Border Width</span>
+          <input v-model.number="selectedImage.borderWidth" type="range" min="0" max="24" step="1">
+          <input v-model.number="selectedImage.borderWidth" class="number-input" type="number" min="0" max="24" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedImage.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
         </label>
 
         <div class="control-row">
@@ -706,11 +803,31 @@ export default {
         <div class="chart-color-grid">
           <label><span>Line</span><input v-model="selectedChart.stroke" type="color"></label>
           <label><span>Fill</span><input v-model="selectedChart.fill" type="color"></label>
+          <label><span>Border</span><input v-model="selectedChart.borderColor" type="color"></label>
         </div>
 
         <label class="control-row">
           <span>Stroke</span>
           <input v-model.number="selectedChart.strokeWidth" type="range" min="1" max="12" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Width</span>
+          <input v-model.number="selectedChart.borderWidth" type="range" min="0" max="24" step="1">
+          <input v-model.number="selectedChart.borderWidth" class="number-input" type="number" min="0" max="24" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedChart.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
         </label>
 
         <label class="control-row">
@@ -788,7 +905,7 @@ export default {
           @dragleave="handleImageDragLeave"
           @drop="handleImageDrop"
       >
-        <v-stage :config="stageConfig" @mousedown="handleStagePointerDown">
+        <v-stage ref="stageRef" :config="stageConfig" @mousedown="handleStagePointerDown">
           <v-layer>
             <v-rect :config="pageConfig" />
             <v-rect :config="pageMarginGuideConfig" />
@@ -804,23 +921,36 @@ export default {
                   :get-group-config="getGroupConfig"
                   :get-group-hit-area-config="getGroupHitAreaConfig"
                   :get-grouped-rich-text-image-config="getGroupedRichTextImageConfig"
+                  :get-grouped-text-border-config="getGroupedTextBorderConfig"
                   :get-grouped-text-config="getGroupedTextConfig"
                   :get-grouped-image-box-config="getGroupedImageBoxConfig"
                   :get-grouped-image-content-config="getGroupedImageContentConfig"
+                  :get-grouped-image-border-config="getGroupedImageBorderConfig"
                   :get-grouped-rect-config="getGroupedRectConfig"
                   :get-grouped-child-config="getGroupedChildConfig"
                   :get-grouped-chart-box-config="getGroupedChartBoxConfig"
+                  :get-grouped-chart-border-config="getGroupedChartBorderConfig"
                   :get-grouped-pie-chart-box-config="getGroupedPieChartBoxConfig"
                   :get-grouped-shape-text-image-config="getGroupedShapeTextImageConfig"
                   :get-rich-text-image-config="getRichTextImageConfig"
                   :get-text-config="getTextConfig"
+                  :get-text-border-config="getTextBorderConfig"
                   :get-image-box-config="getImageBoxConfig"
                   :get-image-hit-area-config="getImageHitAreaConfig"
                   :get-image-content-config="getImageContentConfig"
+                  :get-image-border-config="getImageBorderConfig"
+                  :get-label-config="getLabelConfig"
+                  :get-label-tag-config="getLabelTagConfig"
+                  :get-label-text-config="getLabelTextConfig"
                   :get-rect-config="getRectConfig"
+                  :get-circle-config="getCircleConfig"
+                  :get-regular-polygon-config="getRegularPolygonConfig"
                   :get-right-triangle-config="getRightTriangleConfig"
+                  :get-line-config="getLineConfig"
+                  :get-arrow-config="getArrowConfig"
                   :get-chart-box-config="getChartBoxConfig"
                   :get-chart-hit-area-config="getChartHitAreaConfig"
+                  :get-chart-border-config="getChartBorderConfig"
                   :get-chart-title-config="getChartTitleConfig"
                   :get-chart-x-axis-label-config="getChartXAxisLabelConfig"
                   :get-chart-y-axis-label-config="getChartYAxisLabelConfig"

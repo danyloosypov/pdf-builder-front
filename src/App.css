@@ -41,6 +41,17 @@
   background: #eff6ff;
 }
 
+.export-pdf-button {
+  border-color: #bbf7d0;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.export-pdf-button:disabled {
+  color: #64748b;
+  cursor: wait;
+}
+
 .file-upload-button {
   display: inline-flex;
   align-items: center;

@@ -21,6 +21,9 @@ export class TextElement extends CanvasElement {
       fontSize: 20,
       lineHeight: 1.35,
       letterSpacing: 0,
+      borderColor: '#111827',
+      borderWidth: 0,
+      borderStyle: 'solid',
       wrap: 'word',
       draggable: true,
       ...config
@@ -39,6 +42,9 @@ export class ImageElement extends CanvasElement {
       height: 150,
       cornerRadius: 0,
       opacity: 1,
+      borderColor: '#111827',
+      borderWidth: 0,
+      borderStyle: 'solid',
       objectFit: 'cover',
       cropLeft: 0,
       cropRight: 0,
@@ -62,6 +68,7 @@ export class RectElement extends CanvasElement {
       fill: '#dddddd',
       stroke: '#111827',
       strokeWidth: 2,
+      borderStyle: 'solid',
       cornerRadius: 0,
       opacity: 1,
       draggable: true,
@@ -81,6 +88,7 @@ export class CircleElement extends CanvasElement {
       fill: '#87ceeb',
       stroke: '#111827',
       strokeWidth: 2,
+      borderStyle: 'solid',
       opacity: 1,
       draggable: true,
       ...config
@@ -100,6 +108,7 @@ export class RegularPolygonElement extends CanvasElement {
       fill: '#f1c40f',
       stroke: '#000000',
       strokeWidth: 2,
+      borderStyle: 'solid',
       opacity: 1,
       draggable: true,
       ...config
@@ -119,6 +128,7 @@ export class RightTriangleElement extends CanvasElement {
       fill: '#60a5fa',
       stroke: '#111827',
       strokeWidth: 2,
+      borderStyle: 'solid',
       opacity: 1,
       draggable: true,
       ...config
@@ -134,6 +144,8 @@ export class LineElement extends CanvasElement {
       points: [100, 100, 300, 300],
       stroke: '#000000',
       strokeWidth: 2,
+      borderStyle: 'solid',
+      hitStrokeWidth: 18,
       opacity: 1,
       lineCap: 'round',
       lineJoin: 'round',
@@ -151,6 +163,8 @@ export class ArrowElement extends CanvasElement {
       points: [100, 200, 300, 200],
       stroke: 'red',
       strokeWidth: 3,
+      borderStyle: 'solid',
+      opacity: 1,
       pointerLength: 10,
       pointerWidth: 10,
       draggable: true,
@@ -169,6 +183,9 @@ export class LabelElement extends CanvasElement {
       draggable: true,
       text: 'LABEL',
       opacity: 1,
+      borderColor: '#111827',
+      borderWidth: 0,
+      borderStyle: 'solid',
       tag: {
         fill: '#3498db',
         cornerRadius: 4
@@ -194,6 +211,9 @@ export class ChartElement extends CanvasElement {
       width: 280,
       height: 170,
       rotation: 0,
+      borderColor: '#111827',
+      borderWidth: 0,
+      borderStyle: 'solid',
       draggable: true,
       ...config
     })

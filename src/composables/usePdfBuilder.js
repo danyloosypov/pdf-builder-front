@@ -65,6 +65,8 @@ const customPageMarginsInches = ref({
   bottom: 1,
   left: 1
 })
+const isPdfExporting = ref(false)
+const pdfExportError = ref('')
 
 const pageDimensionStep = computed(() => pageUnit.value === 'cm' ? 0.1 : 0.05)
 const pageDimensionMin = computed(() => convertInchesToPageUnit(MIN_PAGE_INCHES))
@@ -153,8 +155,8 @@ const pageConfig = computed(() => ({
   width: pagePixelSize.value.width,
   height: pagePixelSize.value.height,
   fill: canvasColor.value,
-  stroke: '#d1d5db',
-  strokeWidth: 1,
+  stroke: isPdfExporting.value ? canvasColor.value : '#d1d5db',
+  strokeWidth: isPdfExporting.value ? 0 : 1,
   x: PAGE_OFFSET_X,
   y: PAGE_OFFSET_Y
 }))
@@ -174,6 +176,7 @@ const pageMarginGuideConfig = computed(() => {
     stroke: '#94a3b8',
     strokeWidth: 1,
     dash: [6, 4],
+    visible: !isPdfExporting.value,
     listening: false
   }
 })
@@ -194,6 +197,7 @@ const stageShellStyle = computed(() => ({
 
 const selectedId = ref(null)
 const selectedIds = ref([])
+const stageRef = ref(null)
 const transformerRef = ref(null)
 const nodeRefs = ref({})
 const editingId = ref(null)
@@ -228,8 +232,9 @@ const defaultTextSettings = {
   letterSpacing: 0
 }
 const CLIPBOARD_PASTE_OFFSET = 24
-const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line']
+const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
 const regularPolygonShapeTypes = ['polygon', 'triangle']
+const borderableElementTypes = ['text', 'image', 'label', 'chart']
 const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
 const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle']
 const cornerRadiusFields = [
@@ -244,13 +249,33 @@ const shapeLabels = {
   polygon: 'Polygon',
   triangle: 'Triangle',
   rightTriangle: 'Right Triangle',
-  line: 'Line'
+  line: 'Line',
+  arrow: 'Arrow'
 }
 const defaultShapeSettings = {
   stroke: '#111827',
   strokeWidth: 2,
+  borderStyle: 'solid',
   opacity: 1
 }
+const defaultElementBorderSettings = {
+  borderColor: '#111827',
+  borderWidth: 0,
+  borderStyle: 'solid'
+}
+const borderStyleOptions = [
+  { label: 'Solid', value: 'solid' },
+  { label: 'Dashed', value: 'dashed' },
+  { label: 'Dotted', value: 'dotted' },
+  { label: 'Dash-dot', value: 'dashDot' }
+]
+const borderStyleValues = new Set(borderStyleOptions.map(option => option.value))
+const borderStyleAliases = {
+  dashdot: 'dashDot',
+  'dash-dot': 'dashDot',
+  dash_dot: 'dashDot'
+}
+const defaultLineHitStrokeWidth = 18
 const defaultShapeFills = {
   rect: '#dddddd',
   circle: '#87ceeb',
@@ -539,6 +564,7 @@ const transformerConfig = computed(() => {
   const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart', 'pieChart'].includes(selectedItem.value?.type)
 
   return {
+    visible: !isPdfExporting.value,
     rotateEnabled: !isMoveOnlySelection,
     keepRatio: !canResizeFreely,
     flipEnabled: false,
@@ -1251,6 +1277,10 @@ function getGroupedRichTextImageConfig(item) {
   return getGroupedChildConfig(getRichTextImageConfig(item))
 }
 
+function getGroupedTextBorderConfig(item) {
+  return getGroupedChildConfig(getTextBorderConfig(item))
+}
+
 function getGroupedImageBoxConfig(item) {
   return getGroupedChildConfig(getImageBoxConfig(item))
 }
@@ -1259,12 +1289,20 @@ function getGroupedImageContentConfig(item) {
   return getGroupedChildConfig(getImageContentConfig(item))
 }
 
+function getGroupedImageBorderConfig(item) {
+  return getGroupedChildConfig(getImageBorderConfig(item))
+}
+
 function getGroupedRectConfig(item) {
   return getGroupedChildConfig(getRectConfig(item))
 }
 
 function getGroupedChartBoxConfig(item) {
   return getGroupedChildConfig(getChartBoxConfig(item))
+}
+
+function getGroupedChartBorderConfig(item) {
+  return getGroupedChildConfig(getChartBorderConfig(item))
 }
 
 function getGroupedPieChartBoxConfig(item) {
@@ -1470,6 +1508,85 @@ function getShapePanelTitle(item) {
   return `${shapeLabels[item?.type] || 'Shape'} Settings`
 }
 
+function getShapeBorderStyle(value) {
+  const borderStyle = String(value || '').trim()
+
+  if (borderStyleValues.has(borderStyle)) return borderStyle
+
+  return borderStyleAliases[borderStyle.toLowerCase()] || defaultShapeSettings.borderStyle
+}
+
+function getShapeBorderStyleFromDash(dash) {
+  if (!Array.isArray(dash) || !dash.length) return defaultShapeSettings.borderStyle
+
+  const pattern = dash
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0)
+
+  if (pattern.length >= 4) return 'dashDot'
+  if (pattern[0] <= 2) return 'dotted'
+
+  return 'dashed'
+}
+
+function getBorderWidthValue(value) {
+  return Math.round(clampNumber(value, 0, 24))
+}
+
+function getBorderDash(borderStyleValue, borderWidthValue) {
+  const borderStyle = getShapeBorderStyle(borderStyleValue)
+  const borderWidth = Math.max(1, Number(borderWidthValue) || defaultShapeSettings.strokeWidth)
+  const gapLength = Math.max(3, Math.round(borderWidth * 2))
+  const dashLength = Math.max(6, Math.round(borderWidth * 4))
+
+  if (borderStyle === 'dashed') return [dashLength, gapLength]
+  if (borderStyle === 'dotted') return [0.001, gapLength]
+  if (borderStyle === 'dashDot') return [dashLength, gapLength, 0.001, gapLength]
+
+  return []
+}
+
+function getBorderLineConfig(borderStyleValue, borderWidthValue) {
+  const dash = getBorderDash(borderStyleValue, borderWidthValue)
+
+  return {
+    dash,
+    dashEnabled: dash.length > 0,
+    ...(dash.length ? { lineCap: 'round' } : {})
+  }
+}
+
+function getShapeBorderDash(item) {
+  return getBorderDash(item?.borderStyle, item?.strokeWidth)
+}
+
+function getShapeBorderConfig(item) {
+  return getBorderLineConfig(item?.borderStyle, item?.strokeWidth)
+}
+
+function getElementBorderColor(item) {
+  return getHexColor(item?.borderColor, defaultElementBorderSettings.borderColor)
+}
+
+function getElementBorderConfig(item, config = {}) {
+  const borderWidth = getBorderWidthValue(item?.borderWidth ?? defaultElementBorderSettings.borderWidth)
+
+  return {
+    x: config.x ?? 0,
+    y: config.y ?? 0,
+    width: Math.max(1, Number(config.width) || 1),
+    height: Math.max(1, Number(config.height) || 1),
+    rotation: config.rotation || 0,
+    fill: 'rgba(0,0,0,0)',
+    stroke: getElementBorderColor(item),
+    strokeWidth: borderWidth,
+    cornerRadius: config.cornerRadius ?? 0,
+    visible: borderWidth > 0 && config.visible !== false,
+    listening: false,
+    ...getBorderLineConfig(item?.borderStyle, borderWidth)
+  }
+}
+
 function getHexColor(value, fallback) {
   const color = String(value || '').trim().toLowerCase()
   const namedColors = {
@@ -1502,14 +1619,32 @@ function getHexColor(value, fallback) {
   return namedColors[color] || fallback
 }
 
+function canElementHaveBorder(item) {
+  return borderableElementTypes.includes(item?.type)
+}
+
+function ensureElementBorderSettings(item) {
+  if (!canElementHaveBorder(item)) return
+
+  if (item.borderColor === undefined) item.borderColor = defaultElementBorderSettings.borderColor
+  if (item.borderWidth === undefined) item.borderWidth = defaultElementBorderSettings.borderWidth
+  if (item.borderStyle === undefined) item.borderStyle = getShapeBorderStyleFromDash(item.dash)
+
+  item.borderColor = getElementBorderColor(item)
+  item.borderWidth = getBorderWidthValue(item.borderWidth)
+  item.borderStyle = getShapeBorderStyle(item.borderStyle)
+}
+
 function ensureShapeSettings(item) {
   if (!item || !shapeTypes.includes(item.type)) return
 
   if (item.stroke === undefined) item.stroke = defaultShapeSettings.stroke
   if (item.strokeWidth === undefined) item.strokeWidth = defaultShapeSettings.strokeWidth
+  if (item.borderStyle === undefined) item.borderStyle = getShapeBorderStyleFromDash(item.dash)
   if (item.opacity === undefined) item.opacity = defaultShapeSettings.opacity
 
   item.stroke = getHexColor(item.stroke, defaultShapeSettings.stroke)
+  item.borderStyle = getShapeBorderStyle(item.borderStyle)
 
   if (canShapeHaveFill(item) && item.fill === undefined) {
     item.fill = defaultShapeFills[item.type]
@@ -1523,9 +1658,15 @@ function ensureShapeSettings(item) {
     item.cornerRadius = 0
   }
 
-  if (item.type === 'line') {
+  if (item.type === 'line' || item.type === 'arrow') {
     if (item.lineCap === undefined) item.lineCap = 'round'
     if (item.lineJoin === undefined) item.lineJoin = 'round'
+  }
+
+  if (item.type === 'line') {
+    if (item.hitStrokeWidth === undefined) {
+      item.hitStrokeWidth = Math.max(defaultLineHitStrokeWidth, item.strokeWidth || 0)
+    }
   }
 }
 
@@ -1913,6 +2054,17 @@ function getTextConfig(item) {
   }
 }
 
+function getTextBorderConfig(item) {
+  return getElementBorderConfig(item, {
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    rotation: item.rotation || 0,
+    visible: item.id !== editingId.value
+  })
+}
+
 function getRectConfig(item) {
   return {
     ...item,
@@ -1920,7 +2072,30 @@ function getRectConfig(item) {
     strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.rect,
-    cornerRadius: getCornerRadiusConfig(item)
+    cornerRadius: getCornerRadiusConfig(item),
+    ...getShapeBorderConfig(item)
+  }
+}
+
+function getCircleConfig(item) {
+  return {
+    ...item,
+    stroke: item.stroke ?? defaultShapeSettings.stroke,
+    strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
+    opacity: item.opacity ?? defaultShapeSettings.opacity,
+    fill: item.fill ?? defaultShapeFills.circle,
+    ...getShapeBorderConfig(item)
+  }
+}
+
+function getRegularPolygonConfig(item) {
+  return {
+    ...item,
+    stroke: item.stroke ?? defaultShapeSettings.stroke,
+    strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
+    opacity: item.opacity ?? defaultShapeSettings.opacity,
+    fill: item.fill ?? defaultShapeFills[item.type],
+    ...getShapeBorderConfig(item)
   }
 }
 
@@ -1941,7 +2116,35 @@ function getRightTriangleConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     lineJoin: 'round',
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false
+    draggable: item.draggable !== false,
+    ...getShapeBorderConfig(item)
+  }
+}
+
+function getLineConfig(item) {
+  return {
+    ...item,
+    stroke: item.stroke ?? defaultShapeSettings.stroke,
+    strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
+    opacity: item.opacity ?? defaultShapeSettings.opacity,
+    lineCap: item.lineCap ?? 'round',
+    lineJoin: item.lineJoin ?? 'round',
+    hitStrokeWidth: item.hitStrokeWidth ?? Math.max(defaultLineHitStrokeWidth, item.strokeWidth || 0),
+    draggable: item.draggable !== false,
+    ...getShapeBorderConfig(item)
+  }
+}
+
+function getArrowConfig(item) {
+  return {
+    ...item,
+    stroke: item.stroke ?? defaultShapeSettings.stroke,
+    strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
+    opacity: item.opacity ?? defaultShapeSettings.opacity,
+    lineCap: item.lineCap ?? 'round',
+    lineJoin: item.lineJoin ?? 'round',
+    draggable: item.draggable !== false,
+    ...getShapeBorderConfig(item)
   }
 }
 
@@ -1976,6 +2179,42 @@ function getImageHitAreaConfig(item) {
     width: item.width,
     height: item.height,
     fill: 'rgba(0,0,0,0)'
+  }
+}
+
+function getImageBorderConfig(item) {
+  return getElementBorderConfig(item, {
+    width: item.width,
+    height: item.height,
+    cornerRadius: getCornerRadiusConfig(item)
+  })
+}
+
+function getLabelConfig(item) {
+  return {
+    x: item.x,
+    y: item.y,
+    draggable: item.draggable,
+    rotation: item.rotation || 0,
+    opacity: item.opacity ?? 1
+  }
+}
+
+function getLabelTagConfig(item) {
+  const borderWidth = getBorderWidthValue(item?.borderWidth ?? defaultElementBorderSettings.borderWidth)
+
+  return {
+    ...item.tag,
+    stroke: getElementBorderColor(item),
+    strokeWidth: borderWidth,
+    ...getBorderLineConfig(item?.borderStyle, borderWidth)
+  }
+}
+
+function getLabelTextConfig(item) {
+  return {
+    ...item.textConfig,
+    text: item.text
   }
 }
 
@@ -2093,6 +2332,13 @@ function getChartHitAreaConfig(item) {
     height: item.height,
     fill: item.backgroundColor || defaultChartSettings.backgroundColor
   }
+}
+
+function getChartBorderConfig(item) {
+  return getElementBorderConfig(item, {
+    width: item.width,
+    height: item.height
+  })
 }
 
 function parseChartNumberList(value) {
@@ -2934,6 +3180,7 @@ function ensureSelectableItemSettings(item) {
   ensureChartSettings(item)
   ensurePieChartSettings(item)
   ensureLabelSettings(item)
+  ensureElementBorderSettings(item)
   ensureShapeSettings(item)
 }
 
@@ -3457,7 +3704,7 @@ function handleStagePointerDown(event) {
 
 function finishTextEditing() {
   const item = editingItem.value
-  if (!item || !editor.value) return
+  if (!item || !editor.value) return false
 
   const target = editingTextTarget.value
 
@@ -3483,14 +3730,14 @@ function finishTextEditing() {
   editingTextTarget.value = 'text'
 
   if (target === 'shape') {
-    renderShapeRichText(item, html, width, height)
-  } else {
-    renderRichText(item, html, width, height)
+    return renderShapeRichText(item, html, width, height)
   }
+
+  return renderRichText(item, html, width, height)
 }
 
 function renderShapeRichText(item, html, width, height) {
-  renderRichText(item, html, width, height, {
+  return renderRichText(item, html, width, height, {
     imageKey: 'shapeRichImage',
     renderKey: `${item.id}:shapeRichImage`,
     style: {
@@ -3621,19 +3868,29 @@ function renderRichText(item, html, width, height, options = {}) {
   }))
   const image = new window.Image()
 
-  image.onload = () => {
-    URL.revokeObjectURL(objectUrl)
-    if (richRenderVersions.get(renderKey) !== renderVersion) return
+  return new Promise(resolve => {
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      if (richRenderVersions.get(renderKey) !== renderVersion) {
+        resolve(false)
+        return
+      }
 
-    item[imageKey] = image
+      item[imageKey] = image
 
-    nextTick(() => {
-      if (selectedId.value === item.id) selectElement(item.id)
-    })
-  }
+      nextTick(() => {
+        if (selectedId.value === item.id) selectElement(item.id)
+      })
+      resolve(true)
+    }
 
-  image.onerror = () => URL.revokeObjectURL(objectUrl)
-  image.src = objectUrl
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(false)
+    }
+
+    image.src = objectUrl
+  })
 }
 
 /* -------------------------
@@ -3732,6 +3989,401 @@ const runtimeLayoutKeys = new Set([
   'imageSource'
 ])
 const DEFAULT_EXPORTED_IMAGE_URL = ''
+const PDF_POINTS_PER_INCH = 72
+const PDF_EXPORT_MAX_PIXEL_RATIO = 2
+const PDF_EXPORT_MAX_CANVAS_SIDE = 8192
+
+function getStageNode() {
+  return stageRef.value?.getNode?.() || null
+}
+
+function getPdfExportPixelRatio(bounds) {
+  const longestSide = Math.max(Number(bounds?.width) || 1, Number(bounds?.height) || 1)
+
+  return Math.max(0.1, Math.min(PDF_EXPORT_MAX_PIXEL_RATIO, PDF_EXPORT_MAX_CANVAS_SIDE / longestSide))
+}
+
+function formatPdfNumber(value) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) return '0'
+
+  return String(Math.round(numericValue * 1000) / 1000)
+}
+
+function getDataUrlBase64(dataUrl) {
+  const marker = 'base64,'
+  const markerIndex = String(dataUrl || '').indexOf(marker)
+
+  return markerIndex >= 0 ? dataUrl.slice(markerIndex + marker.length) : ''
+}
+
+function getBase64Bytes(base64) {
+  const binaryString = window.atob(String(base64 || '').replace(/\s/g, ''))
+  const bytes = new Uint8Array(binaryString.length)
+
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index)
+  }
+
+  return bytes
+}
+
+function isJpegDataUrl(dataUrl) {
+  return /^data:image\/jpe?g;base64,/i.test(String(dataUrl || ''))
+}
+
+function getCanvasJpegDataUrl(canvas) {
+  if (!canvas?.width || !canvas?.height || typeof canvas.toDataURL !== 'function') {
+    throw new Error('Could not capture the current canvas.')
+  }
+
+  let dataUrl
+
+  try {
+    dataUrl = canvas.toDataURL('image/jpeg', 0.96)
+  } catch (error) {
+    if (isTaintedCanvasError(error)) {
+      throw new Error(getTaintedCanvasPdfExportMessage())
+    }
+
+    throw error
+  }
+
+  if (!isJpegDataUrl(dataUrl)) {
+    throw new Error('Could not encode the current canvas as a PDF image.')
+  }
+
+  return dataUrl
+}
+
+function isTaintedCanvasError(error) {
+  return /taint|cross-origin|insecure/i.test(String(error?.message || error || ''))
+}
+
+function getTaintedCanvasPdfExportMessage() {
+  return 'PDF export is blocked by a cross-origin image. Re-upload that image from your computer, or use an image URL that allows cross-origin access.'
+}
+
+function getCanvasImagePixelSize(image) {
+  return {
+    width: image?.naturalWidth || image?.videoWidth || image?.width || 0,
+    height: image?.naturalHeight || image?.videoHeight || image?.height || 0
+  }
+}
+
+function isLocalImageSource(source) {
+  return /^(data|blob):/i.test(String(source || ''))
+}
+
+function isRemoteImageSource(source) {
+  return /^https?:\/\//i.test(String(source || ''))
+}
+
+async function isCanvasImageExportSafe(image) {
+  const size = getCanvasImagePixelSize(image)
+
+  if (!image || !size.width || !size.height) return true
+
+  try {
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+
+    if (!context) return false
+
+    canvas.width = 1
+    canvas.height = 1
+    context.drawImage(image, 0, 0, 1, 1)
+    canvas.toDataURL('image/png')
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readBlobAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Could not read image data.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function fetchImageDataUrl(source) {
+  const response = await fetch(source, {
+    mode: 'cors',
+    credentials: 'omit'
+  })
+
+  if (!response.ok) {
+    throw new Error('Could not load image for export.')
+  }
+
+  return readBlobAsDataUrl(await response.blob())
+}
+
+async function loadExportSafeImageFromSource(source) {
+  if (!source) return null
+
+  if (isLocalImageSource(source)) {
+    return loadImageFromSource(source)
+  }
+
+  if (!isRemoteImageSource(source)) return null
+
+  try {
+    return await loadImageFromSource(source, { crossOrigin: 'anonymous' })
+  } catch {
+    const dataUrl = await fetchImageDataUrl(source)
+
+    return loadImageFromSource(dataUrl)
+  }
+}
+
+function getImageElementExportSource(item) {
+  return [
+    item?.imageDataUrl,
+    item?.image?.src,
+    item?.imageUrl,
+    item?.sourceUrl,
+    item?.url,
+    item?.imageSource
+  ].find(value => typeof value === 'string' && value.trim())?.trim() || ''
+}
+
+async function ensureImageElementExportSafe(item, blockedImages) {
+  if (item?.type !== 'image') return
+  if (await isCanvasImageExportSafe(item.image)) return
+
+  const source = getImageElementExportSource(item)
+
+  try {
+    const exportSafeImage = await loadExportSafeImageFromSource(source)
+
+    if (exportSafeImage && await isCanvasImageExportSafe(exportSafeImage)) {
+      item.image = exportSafeImage
+      return
+    }
+  } catch {
+    // Fall through to the blocked-image message below.
+  }
+
+  blockedImages.push(item)
+}
+
+async function prepareRichTextImageForPdfExport(item, imageKey, restoreCallbacks) {
+  if (!item?.[imageKey]) return
+  if (await isCanvasImageExportSafe(item[imageKey])) return
+
+  const originalImage = item[imageKey]
+
+  item[imageKey] = null
+  restoreCallbacks.push(() => {
+    item[imageKey] = originalImage
+  })
+}
+
+async function prepareCanvasItemForPdfExport(item, blockedImages, restoreCallbacks) {
+  if (!item || typeof item !== 'object') return
+
+  await ensureImageElementExportSafe(item, blockedImages)
+  await prepareRichTextImageForPdfExport(item, 'richImage', restoreCallbacks)
+  await prepareRichTextImageForPdfExport(item, 'shapeRichImage', restoreCallbacks)
+
+  if (Array.isArray(item.children)) {
+    for (const child of item.children) {
+      await prepareCanvasItemForPdfExport(child, blockedImages, restoreCallbacks)
+    }
+  }
+}
+
+async function prepareLayoutForPdfExport() {
+  const blockedImages = []
+  const restoreCallbacks = []
+
+  for (const item of elements.value) {
+    await prepareCanvasItemForPdfExport(item, blockedImages, restoreCallbacks)
+  }
+
+  if (blockedImages.length) {
+    restoreCallbacks.reverse().forEach(restore => restore())
+    throw new Error(`${getTaintedCanvasPdfExportMessage()} Blocked image${blockedImages.length === 1 ? '' : 's'}: ${blockedImages.length}.`)
+  }
+
+  if (restoreCallbacks.length) {
+    await nextTick()
+  }
+
+  return async () => {
+    restoreCallbacks.reverse().forEach(restore => restore())
+
+    if (restoreCallbacks.length) {
+      await nextTick()
+    }
+  }
+}
+
+function createPdfBlobFromJpegDataUrl(dataUrl, options) {
+  if (!isJpegDataUrl(dataUrl)) {
+    throw new Error('Could not prepare PDF image data.')
+  }
+
+  const imageBytes = getBase64Bytes(getDataUrlBase64(dataUrl))
+
+  if (!imageBytes.length) {
+    throw new Error('Could not prepare PDF image data.')
+  }
+
+  const encoder = new TextEncoder()
+  const chunks = []
+  const offsets = [0]
+  let offset = 0
+  const pageWidth = formatPdfNumber(options.pageWidthInches * PDF_POINTS_PER_INCH)
+  const pageHeight = formatPdfNumber(options.pageHeightInches * PDF_POINTS_PER_INCH)
+  const imageWidth = Math.max(1, Math.round(options.imageWidth))
+  const imageHeight = Math.max(1, Math.round(options.imageHeight))
+  const contentBytes = encoder.encode(`q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/Im0 Do\nQ`)
+
+  const pushBytes = bytes => {
+    chunks.push(bytes)
+    offset += bytes.length
+  }
+  const pushText = text => pushBytes(encoder.encode(text))
+  const objects = [
+    [`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`],
+    [`2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n`],
+    [`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`],
+    [
+      `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imageWidth} /Height ${imageHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`,
+      imageBytes,
+      `\nendstream\nendobj\n`
+    ],
+    [
+      `5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`,
+      contentBytes,
+      `\nendstream\nendobj\n`
+    ]
+  ]
+
+  pushText('%PDF-1.4\n')
+
+  objects.forEach(objectChunks => {
+    offsets.push(offset)
+
+    objectChunks.forEach(chunk => {
+      if (typeof chunk === 'string') {
+        pushText(chunk)
+      } else {
+        pushBytes(chunk)
+      }
+    })
+  })
+
+  const xrefOffset = offset
+  const xrefRows = offsets
+    .slice(1)
+    .map(objectOffset => `${String(objectOffset).padStart(10, '0')} 00000 n \n`)
+    .join('')
+
+  pushText([
+    'xref\n',
+    `0 ${objects.length + 1}\n`,
+    '0000000000 65535 f \n',
+    xrefRows,
+    'trailer\n',
+    `<< /Size ${objects.length + 1} /Root 1 0 R >>\n`,
+    'startxref\n',
+    `${xrefOffset}\n`,
+    '%%EOF'
+  ].join(''))
+
+  return new Blob(chunks, { type: 'application/pdf' })
+}
+
+function getPdfExportFileName() {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/\.\d{3}Z$/, '')
+    .replaceAll(':', '-')
+
+  return `pdf-builder-layout-${timestamp}.pdf`
+}
+
+function downloadBlobFile(blob, fileName) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = fileName
+  document.body.append(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function getCurrentLayoutPdfBlob() {
+  const stage = getStageNode()
+
+  if (!stage) {
+    throw new Error('Canvas is not ready yet.')
+  }
+
+  let restoreExportState = async () => {}
+
+  try {
+    if (editingItem.value) {
+      await finishTextEditing()
+    } else {
+      syncActiveTextEditForLayoutExport()
+    }
+
+    await nextTick()
+
+    restoreExportState = await prepareLayoutForPdfExport()
+    await nextTick()
+
+    const crop = pageConfig.value
+    const pixelRatio = getPdfExportPixelRatio(crop)
+    const exportCanvas = stage.toCanvas({
+      x: crop.x,
+      y: crop.y,
+      width: crop.width,
+      height: crop.height,
+      pixelRatio
+    })
+    const dataUrl = getCanvasJpegDataUrl(exportCanvas)
+
+    return createPdfBlobFromJpegDataUrl(dataUrl, {
+      imageWidth: exportCanvas.width,
+      imageHeight: exportCanvas.height,
+      pageWidthInches: pageSizeInches.value.width,
+      pageHeightInches: pageSizeInches.value.height
+    })
+  } finally {
+    await restoreExportState()
+  }
+}
+
+async function exportCurrentLayoutAsPdf() {
+  if (isPdfExporting.value) return
+
+  isPdfExporting.value = true
+  pdfExportError.value = ''
+
+  try {
+    await nextTick()
+    const pdfBlob = await getCurrentLayoutPdfBlob()
+
+    downloadBlobFile(pdfBlob, getPdfExportFileName())
+  } catch (error) {
+    pdfExportError.value = error?.message || 'Could not export the current layout to PDF.'
+  } finally {
+    isPdfExporting.value = false
+  }
+}
 
 function getSerializableLayoutValue(value) {
   if (Array.isArray(value)) return value.map(getSerializableLayoutValue)
@@ -4191,6 +4843,7 @@ onBeforeUnmount(() => {
     stageShellStyle,
     selectedId,
     selectedIds,
+    stageRef,
     transformerRef,
     nodeRefs,
     editingId,
@@ -4205,6 +4858,8 @@ onBeforeUnmount(() => {
     isImportingLayout,
     layoutImportError,
     layoutImportMessage,
+    isPdfExporting,
+    pdfExportError,
     copiedCanvasItems,
     richRenderVersions,
     canvasVersion,
@@ -4212,11 +4867,15 @@ onBeforeUnmount(() => {
     defaultTextSettings,
     shapeTypes,
     regularPolygonShapeTypes,
+    borderableElementTypes,
     dimensionEditableTypes,
     fillableShapeTypes,
     cornerRadiusFields,
     shapeLabels,
     defaultShapeSettings,
+    defaultElementBorderSettings,
+    borderStyleOptions,
+    defaultLineHitStrokeWidth,
     defaultShapeFills,
     defaultChartSettings,
     defaultPieChartColors,
@@ -4323,10 +4982,13 @@ onBeforeUnmount(() => {
     getGroupedChildConfig,
     getGroupedTextConfig,
     getGroupedRichTextImageConfig,
+    getGroupedTextBorderConfig,
     getGroupedImageBoxConfig,
     getGroupedImageContentConfig,
+    getGroupedImageBorderConfig,
     getGroupedRectConfig,
     getGroupedChartBoxConfig,
+    getGroupedChartBorderConfig,
     getGroupedPieChartBoxConfig,
     getGroupedShapeTextImageConfig,
     ensureImageSettings,
@@ -4353,7 +5015,18 @@ onBeforeUnmount(() => {
     setCornerRadiusValue,
     getCornerRadiusConfig,
     getShapePanelTitle,
+    getShapeBorderStyle,
+    getShapeBorderStyleFromDash,
+    getBorderWidthValue,
+    getBorderDash,
+    getBorderLineConfig,
+    getShapeBorderDash,
+    getShapeBorderConfig,
+    getElementBorderColor,
+    getElementBorderConfig,
     getHexColor,
+    canElementHaveBorder,
+    ensureElementBorderSettings,
     ensureShapeSettings,
     canShapeHaveRichText,
     getEditingTextBaseFontSize,
@@ -4381,11 +5054,20 @@ onBeforeUnmount(() => {
     getShapeTextBox,
     getShapeTextImageConfig,
     getTextConfig,
+    getTextBorderConfig,
     getRectConfig,
+    getCircleConfig,
+    getRegularPolygonConfig,
     getRightTriangleConfig,
+    getLineConfig,
+    getArrowConfig,
     getRichTextImageConfig,
     getImageBoxConfig,
     getImageHitAreaConfig,
+    getImageBorderConfig,
+    getLabelConfig,
+    getLabelTagConfig,
+    getLabelTextConfig,
     getImageCropRect,
     getImageContentConfig,
     getImageCornerRadiusMax,
@@ -4394,6 +5076,7 @@ onBeforeUnmount(() => {
     setChartType,
     getChartBoxConfig,
     getChartHitAreaConfig,
+    getChartBorderConfig,
     parseChartNumberList,
     getChartSeries,
     getChartRange,
@@ -4508,6 +5191,21 @@ onBeforeUnmount(() => {
     updateTransform,
     runtimeLayoutKeys,
     DEFAULT_EXPORTED_IMAGE_URL,
+    PDF_POINTS_PER_INCH,
+    PDF_EXPORT_MAX_PIXEL_RATIO,
+    PDF_EXPORT_MAX_CANVAS_SIDE,
+    getStageNode,
+    getPdfExportPixelRatio,
+    formatPdfNumber,
+    getDataUrlBase64,
+    getBase64Bytes,
+    isJpegDataUrl,
+    getCanvasJpegDataUrl,
+    createPdfBlobFromJpegDataUrl,
+    getPdfExportFileName,
+    downloadBlobFile,
+    getCurrentLayoutPdfBlob,
+    exportCurrentLayoutAsPdf,
     getSerializableLayoutValue,
     waitForExportImage,
     getImageDataUrlForExport,

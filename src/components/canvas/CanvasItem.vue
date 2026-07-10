@@ -8,23 +8,36 @@ defineProps({
   getGroupConfig: { type: Function, required: true },
   getGroupHitAreaConfig: { type: Function, required: true },
   getGroupedRichTextImageConfig: { type: Function, required: true },
+  getGroupedTextBorderConfig: { type: Function, required: true },
   getGroupedTextConfig: { type: Function, required: true },
   getGroupedImageBoxConfig: { type: Function, required: true },
   getGroupedImageContentConfig: { type: Function, required: true },
+  getGroupedImageBorderConfig: { type: Function, required: true },
   getGroupedRectConfig: { type: Function, required: true },
   getGroupedChildConfig: { type: Function, required: true },
   getGroupedChartBoxConfig: { type: Function, required: true },
+  getGroupedChartBorderConfig: { type: Function, required: true },
   getGroupedPieChartBoxConfig: { type: Function, required: true },
   getGroupedShapeTextImageConfig: { type: Function, required: true },
   getRichTextImageConfig: { type: Function, required: true },
   getTextConfig: { type: Function, required: true },
+  getTextBorderConfig: { type: Function, required: true },
   getImageBoxConfig: { type: Function, required: true },
   getImageHitAreaConfig: { type: Function, required: true },
   getImageContentConfig: { type: Function, required: true },
+  getImageBorderConfig: { type: Function, required: true },
+  getLabelConfig: { type: Function, required: true },
+  getLabelTagConfig: { type: Function, required: true },
+  getLabelTextConfig: { type: Function, required: true },
   getRectConfig: { type: Function, required: true },
+  getCircleConfig: { type: Function, required: true },
+  getRegularPolygonConfig: { type: Function, required: true },
   getRightTriangleConfig: { type: Function, required: true },
+  getLineConfig: { type: Function, required: true },
+  getArrowConfig: { type: Function, required: true },
   getChartBoxConfig: { type: Function, required: true },
   getChartHitAreaConfig: { type: Function, required: true },
+  getChartBorderConfig: { type: Function, required: true },
   getChartTitleConfig: { type: Function, required: true },
   getChartXAxisLabelConfig: { type: Function, required: true },
   getChartYAxisLabelConfig: { type: Function, required: true },
@@ -77,6 +90,7 @@ const emit = defineEmits([
             v-else
             :config="getGroupedTextConfig(child)"
         />
+        <v-rect :config="getGroupedTextBorderConfig(child)" />
       </template>
 
       <v-group
@@ -84,6 +98,7 @@ const emit = defineEmits([
           :config="getGroupedImageBoxConfig(child)"
       >
         <v-image :config="getGroupedImageContentConfig(child)" />
+        <v-rect :config="getGroupedImageBorderConfig(child)" />
       </v-group>
 
       <v-rect
@@ -93,12 +108,12 @@ const emit = defineEmits([
 
       <v-circle
           v-else-if="child.type === 'circle'"
-          :config="getGroupedChildConfig(child)"
+          :config="getGroupedChildConfig(getCircleConfig(child))"
       />
 
       <v-regular-polygon
           v-else-if="regularPolygonShapeTypes.includes(child.type)"
-          :config="getGroupedChildConfig(child)"
+          :config="getGroupedChildConfig(getRegularPolygonConfig(child))"
       />
 
       <v-line
@@ -144,6 +159,7 @@ const emit = defineEmits([
             :key="point.id"
             :config="point"
         />
+        <v-rect :config="getGroupedChartBorderConfig(child)" />
       </v-group>
 
       <v-group
@@ -169,20 +185,20 @@ const emit = defineEmits([
 
       <v-line
           v-else-if="child.type === 'line'"
-          :config="getGroupedChildConfig(child)"
+          :config="getGroupedChildConfig(getLineConfig(child))"
       />
 
       <v-arrow
           v-else-if="child.type === 'arrow'"
-          :config="getGroupedChildConfig(child)"
+          :config="getGroupedChildConfig(getArrowConfig(child))"
       />
 
       <v-label
           v-else-if="child.type === 'label'"
-          :config="getGroupedChildConfig({ x: child.x, y: child.y, rotation: child.rotation || 0, opacity: child.opacity ?? 1 })"
+          :config="getGroupedChildConfig(getLabelConfig(child))"
       >
-        <v-tag :config="getGroupedChildConfig(child.tag)" />
-        <v-text :config="getGroupedChildConfig({ ...child.textConfig, text: child.text })" />
+        <v-tag :config="getGroupedChildConfig(getLabelTagConfig(child))" />
+        <v-text :config="getGroupedChildConfig(getLabelTextConfig(child))" />
       </v-label>
 
       <v-image
@@ -215,6 +231,7 @@ const emit = defineEmits([
         @dragend="emit('position-update', $event, item.id)"
         @transformend="emit('transform-update', $event, item.id)"
     />
+    <v-rect :config="getTextBorderConfig(item)" />
   </template>
 
   <v-group
@@ -229,6 +246,7 @@ const emit = defineEmits([
   >
     <v-rect :config="getImageHitAreaConfig(item)" />
     <v-image :config="getImageContentConfig(item)" />
+    <v-rect :config="getImageBorderConfig(item)" />
   </v-group>
 
   <v-rect
@@ -247,7 +265,7 @@ const emit = defineEmits([
   <v-circle
       v-else-if="item.type === 'circle'"
       :ref="el => setRef(el, item.id)"
-      :config="item"
+      :config="getCircleConfig(item)"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"
@@ -260,7 +278,7 @@ const emit = defineEmits([
   <v-regular-polygon
       v-else-if="regularPolygonShapeTypes.includes(item.type)"
       :ref="el => setRef(el, item.id)"
-      :config="item"
+      :config="getRegularPolygonConfig(item)"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"
@@ -327,6 +345,7 @@ const emit = defineEmits([
         :key="point.id"
         :config="point"
     />
+    <v-rect :config="getChartBorderConfig(item)" />
   </v-group>
 
   <v-group
@@ -359,7 +378,7 @@ const emit = defineEmits([
   <v-line
       v-else-if="item.type === 'line'"
       :ref="el => setRef(el, item.id)"
-      :config="item"
+      :config="getLineConfig(item)"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"
@@ -372,7 +391,7 @@ const emit = defineEmits([
   <v-arrow
       v-else-if="item.type === 'arrow'"
       :ref="el => setRef(el, item.id)"
-      :config="item"
+      :config="getArrowConfig(item)"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"
@@ -383,15 +402,15 @@ const emit = defineEmits([
   <v-label
       v-else-if="item.type === 'label'"
       :ref="el => setRef(el, item.id)"
-      :config="{ x: item.x, y: item.y, draggable: item.draggable, rotation: item.rotation || 0, opacity: item.opacity ?? 1 }"
+      :config="getLabelConfig(item)"
       @mousedown="emit('selectable-pointer-down', $event, item.id)"
       @touchstart="emit('selectable-pointer-down', $event, item.id)"
       @click="emit('selectable-click', $event)"
       @dragend="emit('position-update', $event, item.id)"
       @transformend="emit('transform-update', $event, item.id)"
   >
-    <v-tag :config="item.tag" />
-    <v-text :config="item.textConfig" :text="item.text" />
+    <v-tag :config="getLabelTagConfig(item)" />
+    <v-text :config="getLabelTextConfig(item)" />
   </v-label>
 
   <v-image
