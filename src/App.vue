@@ -440,6 +440,18 @@ export default {
             >
           </label>
         </div>
+
+        <label v-if="canEditElementRotation(selectedItem)" class="rotation-input-row">
+          <span>Rotation (deg)</span>
+          <input
+              :value="getElementRotationValue(selectedItem)"
+              type="number"
+              min="-180"
+              max="180"
+              step="1"
+              @input="setElementRotation(selectedItem, $event.target.value)"
+          >
+        </label>
       </div>
 
       <div v-if="selectedText" class="image-editor-panel">

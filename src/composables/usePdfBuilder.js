@@ -2024,6 +2024,33 @@ function getDimensionInputValue(value, fallback) {
   return Math.max(1, numericValue)
 }
 
+function normalizeElementRotation(value, fallback = 0) {
+  const numericValue = Number.parseFloat(value)
+
+  if (!Number.isFinite(numericValue)) return normalizeElementRotation(fallback, 0)
+
+  const normalized = ((numericValue + 180) % 360 + 360) % 360 - 180
+
+  if (normalized === -180 && numericValue > 0) return 180
+
+  return Number(normalized.toFixed(2))
+}
+
+function canEditElementRotation(item) {
+  return Boolean(item && !item.tableGroup && item.type !== 'group' && selectedIds.value.length <= 1)
+}
+
+function getElementRotationValue(item) {
+  return formatDimensionNumber(normalizeElementRotation(item?.rotation || 0), 2)
+}
+
+function setElementRotation(item, value) {
+  if (!canEditElementRotation(item)) return
+
+  item.rotation = normalizeElementRotation(value, item.rotation || 0)
+  updateTransformerSelection()
+}
+
 function resizeLineElementDimension(item, dimension, targetValue) {
   const points = Array.isArray(item.points) ? item.points : []
   const bounds = getLineRawBounds(item)
@@ -5612,6 +5639,10 @@ onBeforeUnmount(() => {
     getEditableElementDimensions,
     getEditableElementDimensionValue,
     getDimensionInputValue,
+    normalizeElementRotation,
+    canEditElementRotation,
+    getElementRotationValue,
+    setElementRotation,
     resizeLineElementDimension,
     setEditableElementDimension,
     getShapeTextCenter,
