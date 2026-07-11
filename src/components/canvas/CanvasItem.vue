@@ -60,6 +60,7 @@ defineProps({
   getTableCellTextConfig: { type: Function, required: true },
   getTableCellSelectionConfig: { type: Function, required: true },
   getTableBorderLineConfigs: { type: Function, required: true },
+  getTableResizeHandleConfigs: { type: Function, required: true },
   getShapeTextImageConfig: { type: Function, required: true }
 })
 
@@ -72,10 +73,56 @@ const emit = defineEmits([
   'table-cell-pointer-down',
   'table-cell-edit',
   'table-cell-context-menu',
+  'table-resize-pointer-down',
+  'table-resize-drag-start',
+  'table-resize-drag-move',
+  'table-resize-drag-end',
   'position-update',
   'position-drag',
   'transform-update'
 ])
+
+function setStageCursor(event, cursor) {
+  const container = event?.target?.getStage?.()?.container?.()
+
+  if (container) {
+    container.style.cursor = cursor
+  }
+}
+
+function getTableResizeCursor(handle) {
+  return handle?.resizeType === 'column' ? 'col-resize' : 'row-resize'
+}
+
+function setTableResizeCursor(event, handle) {
+  setStageCursor(event, getTableResizeCursor(handle))
+}
+
+function clearTableResizeCursor(event) {
+  if (event?.target?.isDragging?.()) return
+
+  setStageCursor(event, '')
+}
+
+function emitTableResizePointerDown(event, itemId, handle) {
+  setTableResizeCursor(event, handle)
+  emit('table-resize-pointer-down', event, itemId, handle)
+}
+
+function emitTableResizeDragStart(event, itemId, handle) {
+  setTableResizeCursor(event, handle)
+  emit('table-resize-drag-start', event, itemId, handle)
+}
+
+function emitTableResizeDragMove(event, itemId, handle) {
+  setTableResizeCursor(event, handle)
+  emit('table-resize-drag-move', event, itemId, handle)
+}
+
+function emitTableResizeDragEnd(event, itemId, handle) {
+  emit('table-resize-drag-end', event, itemId, handle)
+  clearTableResizeCursor(event)
+}
 </script>
 
 <template>
@@ -424,6 +471,18 @@ const emit = defineEmits([
         v-for="line in getTableBorderLineConfigs(item)"
         :key="line.id"
         :config="line"
+    />
+    <v-line
+        v-for="handle in getTableResizeHandleConfigs(item)"
+        :key="handle.id"
+        :config="handle"
+        @mousedown="emitTableResizePointerDown($event, item.id, handle)"
+        @touchstart="emitTableResizePointerDown($event, item.id, handle)"
+        @mouseenter="setTableResizeCursor($event, handle)"
+        @mouseleave="clearTableResizeCursor($event)"
+        @dragstart="emitTableResizeDragStart($event, item.id, handle)"
+        @dragmove="emitTableResizeDragMove($event, item.id, handle)"
+        @dragend="emitTableResizeDragEnd($event, item.id, handle)"
     />
   </v-group>
 

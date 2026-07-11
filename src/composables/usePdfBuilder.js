@@ -458,6 +458,7 @@ const tableColsInput = ref(3)
 const selectedTableCellIds = ref([])
 const editingTableCell = ref(null)
 const tableCellEditorValue = ref('')
+const tableResizeDrag = ref(null)
 const draggedSidebarElementType = ref(null)
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
@@ -496,6 +497,8 @@ const editorPosition = ref({
 })
 const DEFAULT_LINK_TEXT_COLOR = '#2563eb'
 const linkUrlInput = ref('')
+const TABLE_RESIZE_MIN_TRACK_SIZE = 16
+const TABLE_RESIZE_HANDLE_HIT_SIZE = 12
 
 const RichTextStyle = createRichTextStyleExtension({
   getHexColor,
@@ -1550,6 +1553,203 @@ function getTableBorderLineConfigs(table) {
   return Array.from(edgeMap.values())
     .filter(line => line.strokeWidth > 0)
     .map(({ isSelected, ...line }) => line)
+}
+
+function isTableResizeHandleVisible(table) {
+  if (!table || table.type !== 'table' || isPdfExporting.value) return false
+  if (editingTableCell.value && String(editingTableCell.value.tableId) === String(table.id)) return false
+
+  return String(selectedId.value) === String(table.id)
+}
+
+function getTableResizeHandleConfigs(table) {
+  if (!isTableResizeHandleVisible(table)) return []
+
+  const colWidths = getTableColumnWidths(table)
+  const rowHeights = getTableRowHeights(table)
+  const handles = []
+
+  for (let index = 1; index < colWidths.length; index += 1) {
+    const x = getTableTrackOffset(colWidths, index)
+
+    handles.push({
+      id: `${table.id}-resize-column-${index}`,
+      resizeType: 'column',
+      index,
+      x,
+      y: 0,
+      points: [0, 0, 0, table.height],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    })
+  }
+
+  for (let index = 1; index < rowHeights.length; index += 1) {
+    const y = getTableTrackOffset(rowHeights, index)
+
+    handles.push({
+      id: `${table.id}-resize-row-${index}`,
+      resizeType: 'row',
+      index,
+      x: 0,
+      y,
+      points: [0, 0, table.width, 0],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    })
+  }
+
+  return handles
+}
+
+function getTableResizeHandleOffset(table, resizeType, index) {
+  const sizes = resizeType === 'column'
+    ? getTableColumnWidths(table)
+    : getTableRowHeights(table)
+
+  return getTableTrackOffset(sizes, index)
+}
+
+function resetTableResizeHandleNodePosition(node, table, resizeType, index) {
+  if (!node || !table) return
+
+  const offset = getTableResizeHandleOffset(table, resizeType, index)
+
+  if (resizeType === 'column') {
+    node.x(offset)
+    node.y(0)
+  } else {
+    node.x(0)
+    node.y(offset)
+  }
+}
+
+function getTableLocalPointerPosition(table, event) {
+  const point = getStagePointerPosition(event)
+  const node = nodeRefs.value[table?.id]
+
+  if (!point) return null
+
+  if (node?.getAbsoluteTransform) {
+    return node.getAbsoluteTransform().copy().invert().point(point)
+  }
+
+  return {
+    x: point.x - (Number(table?.x) || 0),
+    y: point.y - (Number(table?.y) || 0)
+  }
+}
+
+function getResizedAdjacentTrackSizes(sizes, index, delta) {
+  const previousIndex = index - 1
+  const nextIndex = index
+  const previousSize = sizes[previousIndex]
+  const nextSize = sizes[nextIndex]
+  const minDelta = TABLE_RESIZE_MIN_TRACK_SIZE - previousSize
+  const maxDelta = nextSize - TABLE_RESIZE_MIN_TRACK_SIZE
+  const clampedDelta = clampNumber(delta, minDelta, maxDelta)
+  const nextSizes = [...sizes]
+
+  nextSizes[previousIndex] = previousSize + clampedDelta
+  nextSizes[nextIndex] = nextSize - clampedDelta
+
+  return nextSizes
+}
+
+function handleTableResizeHandlePointerDown(event, tableId) {
+  const table = getCanvasItemById(tableId)
+
+  if (!table) return
+
+  event.cancelBubble = true
+  event.evt?.preventDefault?.()
+  event.evt?.stopPropagation?.()
+
+  if (editingId.value) finishTextEditing()
+  if (editingTableCell.value) finishTableCellEditing()
+  if (contextMenu.value.visible) hideContextMenu()
+
+  ensureTableTrackSettings(table)
+  selectElement(table.id)
+}
+
+function startTableResizeDrag(event, tableId, handle) {
+  const table = getCanvasItemById(tableId)
+
+  if (!table || !handle) return
+
+  handleTableResizeHandlePointerDown(event, tableId)
+
+  const resizeType = handle.resizeType
+  const index = Number(handle.index)
+
+  tableResizeDrag.value = {
+    tableId: table.id,
+    resizeType,
+    index,
+    startOffset: getTableResizeHandleOffset(table, resizeType, index),
+    colWidths: [...table.colWidths],
+    rowHeights: [...table.rowHeights]
+  }
+
+  resetTableResizeHandleNodePosition(event.target, table, resizeType, index)
+}
+
+function resizeTableFromHandleDrag(event, tableId, handle) {
+  const table = getCanvasItemById(tableId)
+  const dragState = tableResizeDrag.value
+
+  if (!table || !handle || !dragState) return
+  if (String(dragState.tableId) !== String(table.id)) return
+
+  event.cancelBubble = true
+  event.evt?.preventDefault?.()
+  event.evt?.stopPropagation?.()
+
+  const point = getTableLocalPointerPosition(table, event)
+
+  if (!point) return
+
+  const resizeType = dragState.resizeType
+  const index = dragState.index
+  const currentOffset = resizeType === 'column' ? point.x : point.y
+  const delta = currentOffset - dragState.startOffset
+
+  if (resizeType === 'column') {
+    table.colWidths = getResizedAdjacentTrackSizes(dragState.colWidths, index, delta)
+  } else {
+    table.rowHeights = getResizedAdjacentTrackSizes(dragState.rowHeights, index, delta)
+  }
+
+  resetTableResizeHandleNodePosition(event.target, table, resizeType, index)
+  event.target?.getLayer?.()?.batchDraw?.()
+}
+
+function finishTableResizeDrag(event, tableId, handle) {
+  const table = getCanvasItemById(tableId)
+  const dragState = tableResizeDrag.value
+
+  if (event) {
+    event.cancelBubble = true
+    event.evt?.stopPropagation?.()
+  }
+
+  if (table && dragState) {
+    resetTableResizeHandleNodePosition(event?.target, table, dragState.resizeType, dragState.index)
+  } else if (table && handle) {
+    resetTableResizeHandleNodePosition(event?.target, table, handle.resizeType, Number(handle.index))
+  }
+
+  tableResizeDrag.value = null
+  updateTransformerSelection()
 }
 
 function getTableCellEditorStyle(table, cell) {
@@ -6695,6 +6895,7 @@ onBeforeUnmount(() => {
     selectedTableCellIds,
     editingTableCell,
     tableCellEditorValue,
+    tableResizeDrag,
     draggedSidebarElementType,
     draggedLayerId,
     dragOverLayerId,
@@ -6857,6 +7058,12 @@ onBeforeUnmount(() => {
     getTableBorderEdgeKey,
     getTableCellBorderEdges,
     getTableBorderLineConfigs,
+    isTableResizeHandleVisible,
+    getTableResizeHandleConfigs,
+    handleTableResizeHandlePointerDown,
+    startTableResizeDrag,
+    resizeTableFromHandleDrag,
+    finishTableResizeDrag,
     getTableCellEditorStyle,
     isTableCellSelected,
     selectTableCell,
