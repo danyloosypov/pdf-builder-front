@@ -178,23 +178,111 @@ export default {
 
         <div class="element-tab-content">
           <div v-if="activeSidebarElementTab === 'text'" class="element-button-grid">
-            <button type="button" @click="addText">Text</button>
-            <button type="button" @click="addLabel">Label</button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addText"
+                @dragstart="handleSidebarElementDragStart($event, 'text')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Text
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addLabel"
+                @dragstart="handleSidebarElementDragStart($event, 'label')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Label
+            </button>
           </div>
 
           <div v-else-if="activeSidebarElementTab === 'shapes'" class="element-button-grid">
-            <button type="button" @click="addRect">Rect</button>
-            <button type="button" @click="addTriangle">Triangle</button>
-            <button type="button" @click="addCircle">Circle</button>
-            <button type="button" @click="addRightTriangle">Right Triangle</button>
-            <button type="button" @click="addArrow">Arrow</button>
-            <button type="button" @click="addLine">Line</button>
-            <button type="button" @click="addPolygon">Polygon</button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addRect"
+                @dragstart="handleSidebarElementDragStart($event, 'rect')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Rect
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addTriangle"
+                @dragstart="handleSidebarElementDragStart($event, 'triangle')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Triangle
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addCircle"
+                @dragstart="handleSidebarElementDragStart($event, 'circle')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Circle
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addRightTriangle"
+                @dragstart="handleSidebarElementDragStart($event, 'rightTriangle')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Right Triangle
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addArrow"
+                @dragstart="handleSidebarElementDragStart($event, 'arrow')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Arrow
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addLine"
+                @dragstart="handleSidebarElementDragStart($event, 'line')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Line
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addPolygon"
+                @dragstart="handleSidebarElementDragStart($event, 'polygon')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Polygon
+            </button>
           </div>
 
           <div v-else-if="activeSidebarElementTab === 'charts'" class="element-button-grid">
-            <button type="button" @click="addChart">Graph</button>
-            <button type="button" @click="addPieChart">Pie Chart</button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addChart"
+                @dragstart="handleSidebarElementDragStart($event, 'chart')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Graph
+            </button>
+            <button
+                type="button"
+                draggable="true"
+                @click="addPieChart"
+                @dragstart="handleSidebarElementDragStart($event, 'pieChart')"
+                @dragend="handleSidebarElementDragEnd"
+            >
+              Pie Chart
+            </button>
           </div>
 
           <div v-else-if="activeSidebarElementTab === 'images'" class="element-button-grid">
@@ -220,7 +308,10 @@ export default {
               <button
                   type="button"
                   :disabled="!qrLink.trim()"
+                  :draggable="!!qrLink.trim()"
                   @click="addQR"
+                  @dragstart="handleSidebarElementDragStart($event, 'qr')"
+                  @dragend="handleSidebarElementDragEnd"
               >
                 QR Code
               </button>
@@ -244,7 +335,10 @@ export default {
               <button
                   type="button"
                   :disabled="!barcodeValue.trim()"
+                  :draggable="!!barcodeValue.trim()"
                   @click="addBarcode"
+                  @dragstart="handleSidebarElementDragStart($event, 'barcode')"
+                  @dragend="handleSidebarElementDragEnd"
               >
                 Barcode
               </button>
@@ -276,7 +370,15 @@ export default {
                   >
                 </label>
               </div>
-              <button type="button" @click="addTable">Add Table</button>
+              <button
+                  type="button"
+                  draggable="true"
+                  @click="addTable"
+                  @dragstart="handleSidebarElementDragStart($event, 'table')"
+                  @dragend="handleSidebarElementDragEnd"
+              >
+                Add Table
+              </button>
             </div>
           </div>
         </div>

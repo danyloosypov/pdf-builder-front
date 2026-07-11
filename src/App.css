@@ -140,6 +140,20 @@
   box-sizing: border-box;
 }
 
+.element-button-grid button[draggable="true"],
+.qr-panel button[draggable="true"],
+.barcode-panel button[draggable="true"],
+.table-create-panel button[draggable="true"] {
+  cursor: grab;
+}
+
+.element-button-grid button[draggable="true"]:active,
+.qr-panel button[draggable="true"]:active,
+.barcode-panel button[draggable="true"]:active,
+.table-create-panel button[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .table-create-panel {
   display: grid;
   gap: 6px;

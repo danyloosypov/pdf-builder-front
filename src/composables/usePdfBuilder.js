@@ -239,11 +239,29 @@ const sidebarElementTabs = [
   { id: 'images', label: 'Изображения' },
   { id: 'other', label: 'Другое' }
 ]
+const SIDEBAR_ELEMENT_DRAG_TYPE = 'application/x-pdf-builder-sidebar-element'
+const sidebarElementDragTypes = new Set([
+  'text',
+  'label',
+  'rect',
+  'triangle',
+  'circle',
+  'rightTriangle',
+  'arrow',
+  'line',
+  'polygon',
+  'chart',
+  'pieChart',
+  'qr',
+  'barcode',
+  'table'
+])
 const tableRowsInput = ref(3)
 const tableColsInput = ref(3)
 const selectedTableCellIds = ref([])
 const editingTableCell = ref(null)
 const tableCellEditorValue = ref('')
+const draggedSidebarElementType = ref(null)
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
 const isImageDragActive = ref(false)
@@ -741,7 +759,7 @@ function getNormalizedQRLink(value) {
   }
 }
 
-function addQR() {
+function addQR(dropPoint = null) {
   const link = getNormalizedQRLink(qrLink.value)
   const targetCanvasVersion = canvasVersion
 
@@ -762,12 +780,15 @@ function addQR() {
       if (targetCanvasVersion !== canvasVersion) return
 
       const id = Date.now()
+      const position = dropPoint
+        ? getTopLeftForDropPoint(dropPoint, 120, 120)
+        : { x: 200, y: 200 }
 
       elements.value.push(new ImageElement({
         id,
         image: img,
-        x: 200,
-        y: 200,
+        x: position.x,
+        y: position.y,
         width: 120,
         height: 120
       }))
@@ -866,7 +887,7 @@ function createBarcodeDataURL(value) {
   return canvas.toDataURL('image/png')
 }
 
-function addBarcode() {
+function addBarcode(dropPoint = null) {
   const value = barcodeValue.value.trim()
   const validationError = getBarcodeValidationError(value)
   const targetCanvasVersion = canvasVersion
@@ -893,12 +914,15 @@ function addBarcode() {
     const id = Date.now()
     const width = Math.min(Math.max(img.width, 260), 520)
     const height = Math.round(width * img.height / img.width)
+    const position = dropPoint
+      ? getTopLeftForDropPoint(dropPoint, width, height)
+      : { x: 200, y: 200 }
 
     elements.value.push(new ImageElement({
       id,
       image: img,
-      x: 200,
-      y: 200,
+      x: position.x,
+      y: position.y,
       width,
       height,
       objectFit: 'contain'
@@ -958,6 +982,35 @@ function getFirstImageFile(files) {
 
 function hasFileDrag(event) {
   return Array.from(event.dataTransfer?.types || []).includes('Files')
+}
+
+function hasSidebarElementDrag(event) {
+  const types = Array.from(event.dataTransfer?.types || [])
+
+  return Boolean(
+    draggedSidebarElementType.value ||
+    types.includes(SIDEBAR_ELEMENT_DRAG_TYPE)
+  )
+}
+
+function getSidebarElementDragType(event) {
+  const dataTransferType = event.dataTransfer?.getData(SIDEBAR_ELEMENT_DRAG_TYPE)
+  const type = dataTransferType || draggedSidebarElementType.value
+
+  return sidebarElementDragTypes.has(type) ? type : null
+}
+
+function handleSidebarElementDragStart(event, type) {
+  if (!sidebarElementDragTypes.has(type) || !event.dataTransfer) return
+
+  draggedSidebarElementType.value = type
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData(SIDEBAR_ELEMENT_DRAG_TYPE, type)
+}
+
+function handleSidebarElementDragEnd() {
+  draggedSidebarElementType.value = null
+  isImageDragActive.value = false
 }
 
 function getCanvasDropPoint(event) {
@@ -1022,14 +1075,14 @@ function uploadImage(event) {
 }
 
 function handleImageDragEnter(event) {
-  if (!hasFileDrag(event)) return
+  if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
   isImageDragActive.value = true
 }
 
 function handleImageDragOver(event) {
-  if (!hasFileDrag(event)) return
+  if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
   event.dataTransfer.dropEffect = 'copy'
@@ -1043,15 +1096,23 @@ function handleImageDragLeave(event) {
 }
 
 function handleImageDrop(event) {
-  if (!hasFileDrag(event)) return
+  if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
   isImageDragActive.value = false
+  const dropPoint = getCanvasDropPoint(event)
+  const sidebarElementType = getSidebarElementDragType(event)
+
+  if (sidebarElementType) {
+    addSidebarElementToCanvas(sidebarElementType, dropPoint)
+    draggedSidebarElementType.value = null
+    return
+  }
 
   const file = getFirstImageFile(event.dataTransfer?.files)
   if (!file) return
 
-  addUploadedImage(file, getCanvasDropPoint(event))
+  addUploadedImage(file, dropPoint)
 }
 
 function addRect() {
@@ -1113,6 +1174,88 @@ function addPieChart() {
   }))
 
   nextTick(() => selectElement(id))
+}
+
+function createSidebarCanvasElement(type) {
+  const id = createUniqueCanvasItemId(collectCanvasItemIds(elements.value))
+
+  switch (type) {
+    case 'text':
+      return new TextElement({ id })
+    case 'label':
+      return new LabelElement({ id })
+    case 'rect':
+      return new RectElement({ id })
+    case 'triangle':
+      return new RegularPolygonElement({
+        id,
+        type: 'triangle',
+        sides: 3,
+        radius: 55,
+        fill: '#f59e0b',
+        stroke: '#111827'
+      })
+    case 'circle':
+      return new CircleElement({ id })
+    case 'rightTriangle':
+      return new RightTriangleElement({ id })
+    case 'arrow':
+      return new ArrowElement({ id })
+    case 'line':
+      return new LineElement({ id })
+    case 'polygon':
+      return new RegularPolygonElement({ id })
+    case 'chart':
+      return new ChartElement({
+        id,
+        ...defaultChartSettings
+      })
+    case 'pieChart':
+      return new PieChartElement({
+        id,
+        ...defaultPieChartSettings,
+        sliceColors: [...defaultPieChartSettings.sliceColors]
+      })
+    case 'table': {
+      const rows = getTableDimensionValue(tableRowsInput.value, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
+      const cols = getTableDimensionValue(tableColsInput.value, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
+
+      return new TableElement({
+        id,
+        rows,
+        cols,
+        width: cols * DEFAULT_TABLE_CELL_WIDTH,
+        height: rows * DEFAULT_TABLE_CELL_HEIGHT,
+        colWidths: Array.from({ length: cols }, () => DEFAULT_TABLE_CELL_WIDTH),
+        rowHeights: Array.from({ length: rows }, () => DEFAULT_TABLE_CELL_HEIGHT),
+        cells: createDefaultTableCells(id, rows, cols)
+      })
+    }
+    default:
+      return null
+  }
+}
+
+function addSidebarElementToCanvas(type, dropPoint) {
+  if (type === 'qr') {
+    addQR(dropPoint)
+    return true
+  }
+
+  if (type === 'barcode') {
+    addBarcode(dropPoint)
+    return true
+  }
+
+  const item = createSidebarCanvasElement(type)
+
+  if (!item) return false
+
+  placeCanvasElementAtDropPoint(item, dropPoint)
+  elements.value.push(item)
+  nextTick(() => selectElement(item.id))
+
+  return true
 }
 
 function getTableDimensionValue(value, min, max, fallback) {
@@ -1988,6 +2131,80 @@ function getCanvasBounds() {
     right: config.x + config.width,
     bottom: config.y + config.height
   }
+}
+
+function getTopLeftForDropPoint(dropPoint, width, height) {
+  const bounds = getCanvasBounds()
+  const itemWidth = Math.max(1, Number(width) || 1)
+  const itemHeight = Math.max(1, Number(height) || 1)
+  const maxX = Math.max(bounds.x, bounds.right - itemWidth)
+  const maxY = Math.max(bounds.y, bounds.bottom - itemHeight)
+
+  return {
+    x: clampNumber((dropPoint?.x ?? bounds.x) - itemWidth / 2, bounds.x, maxX),
+    y: clampNumber((dropPoint?.y ?? bounds.y) - itemHeight / 2, bounds.y, maxY)
+  }
+}
+
+function getCenterForDropPoint(dropPoint, width, height) {
+  const bounds = getCanvasBounds()
+  const itemWidth = Math.max(1, Number(width) || 1)
+  const itemHeight = Math.max(1, Number(height) || 1)
+  const horizontalInset = Math.min(itemWidth / 2, bounds.width / 2)
+  const verticalInset = Math.min(itemHeight / 2, bounds.height / 2)
+
+  return {
+    x: clampNumber(dropPoint?.x ?? bounds.x + bounds.width / 2, bounds.x + horizontalInset, bounds.right - horizontalInset),
+    y: clampNumber(dropPoint?.y ?? bounds.y + bounds.height / 2, bounds.y + verticalInset, bounds.bottom - verticalInset)
+  }
+}
+
+function getLinePositionForDropPoint(item, dropPoint) {
+  const bounds = getCanvasBounds()
+  const lineBounds = getLineLocalBounds(item)
+  const maxX = Math.max(bounds.x - lineBounds.minX, bounds.right - lineBounds.minX - lineBounds.width)
+  const maxY = Math.max(bounds.y - lineBounds.minY, bounds.bottom - lineBounds.minY - lineBounds.height)
+
+  return {
+    x: clampNumber(
+      (dropPoint?.x ?? bounds.x + bounds.width / 2) - lineBounds.minX - lineBounds.width / 2,
+      bounds.x - lineBounds.minX,
+      maxX
+    ),
+    y: clampNumber(
+      (dropPoint?.y ?? bounds.y + bounds.height / 2) - lineBounds.minY - lineBounds.height / 2,
+      bounds.y - lineBounds.minY,
+      maxY
+    )
+  }
+}
+
+function placeCanvasElementAtDropPoint(item, dropPoint) {
+  if (!item || !dropPoint) return item
+
+  const dimensions = getFallbackElementPixelDimensions(item) || { width: 1, height: 1 }
+
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
+    const center = getCenterForDropPoint(dropPoint, dimensions.width, dimensions.height)
+
+    item.x = center.x
+    item.y = center.y
+    return item
+  }
+
+  if (item.type === 'line' || item.type === 'arrow') {
+    const position = getLinePositionForDropPoint(item, dropPoint)
+
+    item.x = position.x
+    item.y = position.y
+    return item
+  }
+
+  const position = getTopLeftForDropPoint(dropPoint, dimensions.width, dimensions.height)
+
+  item.x = position.x
+  item.y = position.y
+  return item
 }
 
 function getItemCoordinate(item, key) {
@@ -6388,6 +6605,7 @@ onBeforeUnmount(() => {
     selectedTableCellIds,
     editingTableCell,
     tableCellEditorValue,
+    draggedSidebarElementType,
     draggedLayerId,
     dragOverLayerId,
     isImageDragActive,
@@ -6494,6 +6712,10 @@ onBeforeUnmount(() => {
     isImageFile,
     getFirstImageFile,
     hasFileDrag,
+    hasSidebarElementDrag,
+    getSidebarElementDragType,
+    handleSidebarElementDragStart,
+    handleSidebarElementDragEnd,
     getCanvasDropPoint,
     addUploadedImage,
     uploadImage,
@@ -6511,6 +6733,8 @@ onBeforeUnmount(() => {
     addPolygon,
     addChart,
     addPieChart,
+    createSidebarCanvasElement,
+    addSidebarElementToCanvas,
     getTableDimensionValue,
     setTableRowsInput,
     setTableColsInput,
@@ -6565,6 +6789,10 @@ onBeforeUnmount(() => {
     getPageMarginPresetInches,
     getClampedPageMargins,
     getCanvasBounds,
+    getTopLeftForDropPoint,
+    getCenterForDropPoint,
+    getLinePositionForDropPoint,
+    placeCanvasElementAtDropPoint,
     getItemCoordinate,
     shouldKeepRuntimeCloneReference,
     cloneCanvasItemValue,
