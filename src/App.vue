@@ -1645,6 +1645,33 @@ export default {
               <button type="button" :class="{ active: editor.isActive('strike') }" title="Strike" @mousedown.prevent="editor.chain().focus().toggleStrike().run()">S</button>
             </div>
 
+            <div class="toolbar-group link-toolbar-group">
+              <input
+                  v-model="linkUrlInput"
+                  type="url"
+                  placeholder="https://..."
+                  title="Link URL"
+                  @keydown.enter.prevent="applySelectedTextLink()"
+                  @mousedown.stop
+              >
+              <button
+                  type="button"
+                  :class="{ active: editor.isActive('link') }"
+                  title="Apply link"
+                  @mousedown.prevent="applySelectedTextLink()"
+              >
+                Link
+              </button>
+              <button
+                  type="button"
+                  :disabled="!editor.isActive('link')"
+                  title="Remove link"
+                  @mousedown.prevent="removeSelectedTextLink"
+              >
+                Unlink
+              </button>
+            </div>
+
             <div class="toolbar-group">
               <button type="button" :class="{ active: isTextAlignActive('left') }" title="Align left" @mousedown.prevent="setTextAlign('left')">L</button>
               <button type="button" :class="{ active: isTextAlignActive('center') }" title="Align center" @mousedown.prevent="setTextAlign('center')">C</button>

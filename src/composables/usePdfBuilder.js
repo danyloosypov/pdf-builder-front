@@ -3,6 +3,7 @@ import { onMounted, onBeforeUnmount } from 'vue'
 import { useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
+import Link from '@tiptap/extension-link'
 import QRCode from 'qrcode'
 import {
   CLIPBOARD_PASTE_OFFSET,
@@ -493,17 +494,33 @@ const editorPosition = ref({
   width: 240,
   rotation: 0
 })
+const DEFAULT_LINK_TEXT_COLOR = '#2563eb'
+const linkUrlInput = ref('')
 
 const RichTextStyle = createRichTextStyleExtension({
   getHexColor,
   getNormalizedTextFontSize
 })
 const TextAlign = createTextAlignExtension()
+const LinkMark = Link.configure({
+  openOnClick: false,
+  enableClickSelection: true,
+  autolink: false,
+  linkOnPaste: true,
+  defaultProtocol: 'https',
+  HTMLAttributes: {
+    target: '_blank',
+    rel: 'noopener noreferrer'
+  },
+  isAllowedUri: url => isAllowedLinkHref(url),
+  shouldAutoLink: url => isAllowedLinkHref(url)
+})
 
 const editor = useEditor({
   extensions: [
     StarterKit,
     Underline,
+    LinkMark,
     RichTextStyle,
     TextAlign
   ],
@@ -526,7 +543,8 @@ const editor = useEditor({
       return false
     }
   },
-  onUpdate: syncEditorContent
+  onUpdate: syncEditorContent,
+  onSelectionUpdate: syncRichTextLinkInput
 })
 
 /* -------------------------
@@ -3662,6 +3680,70 @@ function getCurrentTextOpacity() {
   return getCurrentTextStyle('opacity', 1)
 }
 
+function normalizeLinkHref(value) {
+  const href = String(value || '').trim()
+
+  if (!href) return ''
+  if (/^(https?:|mailto:|tel:|#|\/)/i.test(href)) return href
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(href)) return `mailto:${href}`
+
+  return `https://${href}`
+}
+
+function isAllowedLinkHref(value) {
+  const href = normalizeLinkHref(value)
+
+  return Boolean(href) && !/^(javascript|vbscript|data):/i.test(href)
+}
+
+function getCurrentTextLinkHref() {
+  if (!editor.value) return ''
+
+  return editor.value.getAttributes('link')?.href || ''
+}
+
+function syncRichTextLinkInput() {
+  linkUrlInput.value = getCurrentTextLinkHref()
+}
+
+function applySelectedTextLink(value = linkUrlInput.value) {
+  if (!editor.value) return
+
+  const href = normalizeLinkHref(value)
+  const isEditingExistingLink = editor.value.isActive('link')
+
+  if (!href) {
+    removeSelectedTextLink()
+    return
+  }
+
+  if (!isAllowedLinkHref(href)) return
+
+  linkUrlInput.value = href
+  const chain = editor.value.chain().focus().extendMarkRange('link').setLink({ href })
+
+  if (!isEditingExistingLink) {
+    const currentAttrs = editor.value.getAttributes('richTextStyle') || {}
+    const nextAttrs = getCleanTextStyleAttrs({
+      ...currentAttrs,
+      color: DEFAULT_LINK_TEXT_COLOR
+    })
+
+    chain.setUnderline().setMark('richTextStyle', nextAttrs)
+  }
+
+  chain.run()
+  syncEditorContent()
+}
+
+function removeSelectedTextLink() {
+  if (!editor.value) return
+
+  editor.value.chain().focus().extendMarkRange('link').unsetLink().run()
+  linkUrlInput.value = ''
+  syncEditorContent()
+}
+
 function getCleanTextStyleAttrs(attrs) {
   return Object.fromEntries(
     Object.entries(attrs).filter(([, value]) => value !== null && value !== undefined && value !== '')
@@ -5018,6 +5100,7 @@ function startTextEditing(item) {
     `<p>${plainTextContent}</p>`
   )
   editor.value.commands.setContent(content, { emitUpdate: false })
+  syncRichTextLinkInput()
 
   nextTick(() => editor.value?.commands.focus('end'))
 }
@@ -5050,6 +5133,7 @@ function startShapeTextEditing(item) {
     `<p>${plainTextContent}</p>`
   )
   editor.value.commands.setContent(content, { emitUpdate: false })
+  syncRichTextLinkInput()
 
   nextTick(() => editor.value?.commands.focus('end'))
 }
@@ -5228,6 +5312,7 @@ function renderRichText(item, html, width, height, options = {}) {
     ul, ol { margin: 0.25em 0; padding-left: 1.4em; }
     blockquote { margin: 0.25em 0; padding-left: 0.75em; border-left: 3px solid #aaa; }
     pre { margin: 0.25em 0; padding: 0.4em; background: #f1f1f1; white-space: pre-wrap; }
+    a { color: inherit; text-decoration: none; }
   `
 
   content.innerHTML = normalizeRichTextDecorationColors(html)
@@ -6631,6 +6716,7 @@ onBeforeUnmount(() => {
     lastCanvasPastePoint,
     richRenderVersions,
     canvasVersion,
+    linkUrlInput,
     defaultImageSettings,
     defaultTextSettings,
     defaultTableCellSettings,
@@ -6960,6 +7046,12 @@ onBeforeUnmount(() => {
     getCurrentTextFontFamily,
     getCurrentTextFontSize,
     getCurrentTextOpacity,
+    normalizeLinkHref,
+    isAllowedLinkHref,
+    getCurrentTextLinkHref,
+    syncRichTextLinkInput,
+    applySelectedTextLink,
+    removeSelectedTextLink,
     getCleanTextStyleAttrs,
     applyTextStyle,
     applyRichTextFontSize,
