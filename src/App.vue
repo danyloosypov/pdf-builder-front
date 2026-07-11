@@ -158,6 +158,44 @@ export default {
         </div>
       </div>
 
+      <div class="page-list-panel">
+        <div class="panel-title">Pages</div>
+
+        <div class="page-list" aria-label="Document pages">
+          <button
+              v-for="(page, index) in pages"
+              :key="page.id"
+              type="button"
+              :class="{ active: page.id === activePageId }"
+              @click="selectPage(page.id)"
+          >
+            <span>{{ getPageTitle(page, index) }}</span>
+            <small>{{ page.elements.length }} item{{ page.elements.length === 1 ? '' : 's' }}</small>
+          </button>
+        </div>
+
+        <label class="control-row page-name-row">
+          <span>Name</span>
+          <input
+              :value="activePageName"
+              type="text"
+              @input="renamePage(activePageId, $event.target.value)"
+          >
+        </label>
+
+        <div class="page-button-grid">
+          <button type="button" @click="addPage">Add</button>
+          <button type="button" @click="duplicatePage()">Duplicate</button>
+          <button
+              type="button"
+              :disabled="!hasMultiplePages && !hasCanvasElements"
+              @click="deletePage()"
+          >
+            {{ hasMultiplePages ? 'Delete' : 'Clear' }}
+          </button>
+        </div>
+      </div>
+
       <div class="element-tabs-panel">
         <div class="panel-title">Элементы</div>
 

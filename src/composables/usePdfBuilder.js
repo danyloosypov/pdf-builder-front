@@ -118,11 +118,46 @@ import { getNormalizedQRLink } from '../utils/qr'
 
 export function usePdfBuilder() {
 
+let generatedPageIdCounter = 0
+
+function createPageId() {
+  generatedPageIdCounter += 1
+
+  return `page-${Date.now()}-${generatedPageIdCounter}`
+}
+
+function createCanvasPage(name = '') {
+  return {
+    id: createPageId(),
+    name: name || 'Page',
+    elements: []
+  }
+}
+
 /* -------------------------
    STATE
 --------------------------*/
 
-const elements = ref([])
+const pages = ref([createCanvasPage('Page 1')])
+const activePageId = ref(pages.value[0].id)
+const activePageIndex = computed(() => {
+  const index = pages.value.findIndex(page => page.id === activePageId.value)
+
+  return index >= 0 ? index : 0
+})
+const activePage = computed(() => pages.value[activePageIndex.value] || pages.value[0] || null)
+const activePageName = computed(() => getPageTitle(activePage.value, activePageIndex.value))
+const hasMultiplePages = computed(() => pages.value.length > 1)
+const elements = computed({
+  get: () => activePage.value?.elements || [],
+  set: value => {
+    const page = activePage.value
+
+    if (!page) return
+
+    page.elements = Array.isArray(value) ? value : []
+  }
+})
 
 const selectedPagePreset = ref('a4')
 const pageUnit = ref('cm')
@@ -409,6 +444,101 @@ const layerSidebarItems = computed(() => (
     }))
     .reverse()
 ))
+
+function getPageTitle(page, index = 0) {
+  const pageName = String(page?.name || '').trim()
+
+  return pageName || `Page ${index + 1}`
+}
+
+function getAllPageElements() {
+  return pages.value.flatMap(page => (
+    Array.isArray(page?.elements) ? page.elements : []
+  ))
+}
+
+function resetCanvasInteractionState() {
+  if (editingId.value) finishTextEditing()
+  if (editingTableCell.value) finishTableCellEditing()
+  hideContextMenu()
+  clearSelection()
+  nodeRefs.value = {}
+}
+
+function selectPage(pageId) {
+  const page = pages.value.find(item => item.id === pageId)
+
+  if (!page || page.id === activePageId.value) return
+
+  resetCanvasInteractionState()
+  activePageId.value = page.id
+  canvasVersion += 1
+
+  nextTick(() => {
+    page.elements.forEach(renderImportedRichTextImages)
+    updateTransformerSelection()
+  })
+}
+
+function addPage() {
+  const page = createCanvasPage(`Page ${pages.value.length + 1}`)
+
+  pages.value.push(page)
+  selectPage(page.id)
+}
+
+function duplicatePage(pageId = activePageId.value) {
+  const sourceIndex = pages.value.findIndex(page => page.id === pageId)
+  const sourcePage = pages.value[sourceIndex]
+
+  if (!sourcePage) return
+
+  const usedIds = collectCanvasItemIds(getAllPageElements())
+  const page = createCanvasPage(`${getPageTitle(sourcePage, sourceIndex)} Copy`)
+
+  page.elements = sourcePage.elements.map(item => {
+    const clonedItem = cloneCanvasItem(item)
+
+    assignClonedCanvasItemIds(clonedItem, usedIds)
+
+    return clonedItem
+  })
+
+  pages.value.splice(sourceIndex + 1, 0, page)
+  selectPage(page.id)
+}
+
+function deletePage(pageId = activePageId.value) {
+  if (pages.value.length <= 1) {
+    clearCanvas()
+    return
+  }
+
+  const pageIndex = pages.value.findIndex(page => page.id === pageId)
+
+  if (pageIndex < 0) return
+
+  const isDeletingActivePage = pages.value[pageIndex].id === activePageId.value
+
+  if (isDeletingActivePage) resetCanvasInteractionState()
+
+  pages.value.splice(pageIndex, 1)
+
+  if (isDeletingActivePage) {
+    const nextPage = pages.value[Math.min(pageIndex, pages.value.length - 1)]
+
+    activePageId.value = nextPage.id
+    canvasVersion += 1
+  }
+}
+
+function renamePage(pageId, name) {
+  const page = pages.value.find(item => item.id === pageId)
+
+  if (!page) return
+
+  page.name = String(name ?? '')
+}
 
 // Table elements (rects and text) handled separately to keep positioning group-logical
 const tableItems = computed(() => elements.value.filter(i => i.tableGroup))
@@ -5414,6 +5544,101 @@ function createPdfBlobFromJpegDataUrl(dataUrl, options) {
   return new Blob(chunks, { type: 'application/pdf' })
 }
 
+function createPdfBlobFromJpegDataUrls(pageImages) {
+  if (!Array.isArray(pageImages) || !pageImages.length) {
+    throw new Error('Could not prepare PDF pages.')
+  }
+
+  const encoder = new TextEncoder()
+  const chunks = []
+  const offsets = [0]
+  const pageObjects = []
+  let offset = 0
+
+  const pushBytes = bytes => {
+    chunks.push(bytes)
+    offset += bytes.length
+  }
+  const pushText = text => pushBytes(encoder.encode(text))
+  const objects = [
+    [`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`],
+    ['']
+  ]
+
+  pageImages.forEach((pageImage, index) => {
+    if (!isJpegDataUrl(pageImage.dataUrl)) {
+      throw new Error('Could not prepare PDF image data.')
+    }
+
+    const imageBytes = getBase64Bytes(getDataUrlBase64(pageImage.dataUrl))
+
+    if (!imageBytes.length) {
+      throw new Error('Could not prepare PDF image data.')
+    }
+
+    const pageObjectNumber = objects.length + 1
+    const imageObjectNumber = pageObjectNumber + 1
+    const contentObjectNumber = pageObjectNumber + 2
+    const pageWidth = formatPdfNumber(pageImage.pageWidthInches * PDF_POINTS_PER_INCH)
+    const pageHeight = formatPdfNumber(pageImage.pageHeightInches * PDF_POINTS_PER_INCH)
+    const imageWidth = Math.max(1, Math.round(pageImage.imageWidth))
+    const imageHeight = Math.max(1, Math.round(pageImage.imageHeight))
+    const imageName = `Im${index}`
+    const contentBytes = encoder.encode(`q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/${imageName} Do\nQ`)
+
+    pageObjects.push(`${pageObjectNumber} 0 R`)
+    objects.push(
+      [`${pageObjectNumber} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /${imageName} ${imageObjectNumber} 0 R >> >> /Contents ${contentObjectNumber} 0 R >>\nendobj\n`],
+      [
+        `${imageObjectNumber} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imageWidth} /Height ${imageHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`,
+        imageBytes,
+        `\nendstream\nendobj\n`
+      ],
+      [
+        `${contentObjectNumber} 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`,
+        contentBytes,
+        `\nendstream\nendobj\n`
+      ]
+    )
+  })
+
+  objects[1] = [`2 0 obj\n<< /Type /Pages /Count ${pageObjects.length} /Kids [${pageObjects.join(' ')}] >>\nendobj\n`]
+
+  pushText('%PDF-1.4\n')
+
+  objects.forEach(objectChunks => {
+    offsets.push(offset)
+
+    objectChunks.forEach(chunk => {
+      if (typeof chunk === 'string') {
+        pushText(chunk)
+      } else {
+        pushBytes(chunk)
+      }
+    })
+  })
+
+  const xrefOffset = offset
+  const xrefRows = offsets
+    .slice(1)
+    .map(objectOffset => `${String(objectOffset).padStart(10, '0')} 00000 n \n`)
+    .join('')
+
+  pushText([
+    'xref\n',
+    `0 ${objects.length + 1}\n`,
+    '0000000000 65535 f \n',
+    xrefRows,
+    'trailer\n',
+    `<< /Size ${objects.length + 1} /Root 1 0 R >>\n`,
+    'startxref\n',
+    `${xrefOffset}\n`,
+    '%%EOF'
+  ].join(''))
+
+  return new Blob(chunks, { type: 'application/pdf' })
+}
+
 function getPdfExportFileName() {
   const timestamp = new Date()
     .toISOString()
@@ -5443,6 +5668,7 @@ async function getCurrentLayoutPdfBlob() {
   }
 
   let restoreExportState = async () => {}
+  const originalPageId = activePageId.value
 
   try {
     if (editingItem.value) {
@@ -5455,28 +5681,49 @@ async function getCurrentLayoutPdfBlob() {
 
     await nextTick()
 
-    restoreExportState = await prepareLayoutForPdfExport()
-    await nextTick()
+    const pageImages = []
+    const exportPages = pages.value.length ? pages.value : [activePage.value]
 
-    const crop = pageConfig.value
-    const pixelRatio = getPdfExportPixelRatio(crop)
-    const exportCanvas = stage.toCanvas({
-      x: crop.x,
-      y: crop.y,
-      width: crop.width,
-      height: crop.height,
-      pixelRatio
-    })
-    const dataUrl = getCanvasJpegDataUrl(exportCanvas)
+    for (const page of exportPages) {
+      activePageId.value = page.id
+      nodeRefs.value = {}
+      await nextTick()
 
-    return createPdfBlobFromJpegDataUrl(dataUrl, {
-      imageWidth: exportCanvas.width,
-      imageHeight: exportCanvas.height,
-      pageWidthInches: pageSizeInches.value.width,
-      pageHeightInches: pageSizeInches.value.height
-    })
+      restoreExportState = await prepareLayoutForPdfExport()
+      await nextTick()
+
+      const crop = pageConfig.value
+      const pixelRatio = getPdfExportPixelRatio(crop)
+      const exportCanvas = stage.toCanvas({
+        x: crop.x,
+        y: crop.y,
+        width: crop.width,
+        height: crop.height,
+        pixelRatio
+      })
+
+      pageImages.push({
+        dataUrl: getCanvasJpegDataUrl(exportCanvas),
+        imageWidth: exportCanvas.width,
+        imageHeight: exportCanvas.height,
+        pageWidthInches: pageSizeInches.value.width,
+        pageHeightInches: pageSizeInches.value.height
+      })
+
+      await restoreExportState()
+      restoreExportState = async () => {}
+    }
+
+    return createPdfBlobFromJpegDataUrls(pageImages)
   } finally {
     await restoreExportState()
+
+    if (activePageId.value !== originalPageId) {
+      activePageId.value = originalPageId
+      nodeRefs.value = {}
+      await nextTick()
+      updateTransformerSelection()
+    }
   }
 }
 
@@ -5581,19 +5828,39 @@ async function serializeLayoutElement(item, options = {}) {
   return serializedItem
 }
 
+async function serializeCanvasPage(page, index, options = {}) {
+  const serializedElements = await Promise.all(
+    (Array.isArray(page?.elements) ? page.elements : [])
+      .map(item => serializeLayoutElement(item, options))
+  )
+
+  return {
+    id: page.id,
+    name: getPageTitle(page, index),
+    elements: serializedElements,
+    variables: getTemplateVariablesFromElements(serializedElements)
+  }
+}
+
 async function createLayoutExportData(options = {}) {
   syncActiveTextEditForLayoutExport()
   syncActiveTableCellEditForLayoutExport()
 
-  const serializedElements = await Promise.all(
-    elements.value.map(item => serializeLayoutElement(item, options))
+  const serializedPages = await Promise.all(
+    pages.value.map((page, index) => serializeCanvasPage(page, index, options))
   )
+  const currentSerializedPage = serializedPages[activePageIndex.value] || serializedPages[0] || {
+    elements: []
+  }
+  const allSerializedElements = serializedPages.flatMap(page => page.elements)
 
   return {
     version: 1,
     documentType: options.documentType || 'layout',
     imageMode: options.imageMode || 'url',
     exportedAt: new Date().toISOString(),
+    activePageId: activePageId.value,
+    pageCount: serializedPages.length,
     page: {
       preset: selectedPagePreset.value,
       unit: pageUnit.value,
@@ -5606,8 +5873,9 @@ async function createLayoutExportData(options = {}) {
       marginsInches: { ...pageMarginsInches.value },
       customMarginsInches: { ...customPageMarginsInches.value }
     },
-    variables: getTemplateVariablesFromElements(serializedElements),
-    elements: serializedElements
+    variables: getTemplateVariablesFromElements(allSerializedElements),
+    pages: serializedPages,
+    elements: currentSerializedPage.elements
   }
 }
 
@@ -5689,7 +5957,8 @@ async function applyTemplateValuesData(data) {
   if (editingId.value) finishTextEditing()
   if (editingTableCell.value) finishTableCellEditing()
 
-  const result = applyTemplateVariablesToElements(elements.value, values)
+  const templateElements = getAllPageElements()
+  const result = applyTemplateVariablesToElements(templateElements, values)
   const stats = { failedImages: 0 }
 
   if (result.imageElements.length) {
@@ -5697,7 +5966,7 @@ async function applyTemplateValuesData(data) {
   }
 
   await nextTick()
-  elements.value.forEach(renderImportedRichTextImages)
+  templateElements.forEach(renderImportedRichTextImages)
   updateTransformerSelection()
 
   return {
@@ -5750,6 +6019,30 @@ async function importTemplateValuesFile(event) {
 function getImportLayoutElements(data) {
   if (Array.isArray(data)) return data
   if (Array.isArray(data?.elements)) return data.elements
+
+  return null
+}
+
+function getImportLayoutPages(data) {
+  if (Array.isArray(data?.pages)) {
+    return data.pages
+      .filter(page => page && typeof page === 'object' && Array.isArray(page.elements))
+      .map((page, index) => ({
+        id: typeof page.id === 'string' ? page.id : '',
+        name: typeof page.name === 'string' ? page.name : `Page ${index + 1}`,
+        elements: page.elements
+      }))
+  }
+
+  const layoutElements = getImportLayoutElements(data)
+
+  if (layoutElements) {
+    return [{
+      id: '',
+      name: 'Page 1',
+      elements: layoutElements
+    }]
+  }
 
   return null
 }
@@ -6006,26 +6299,47 @@ function renderImportedRichTextImages(item) {
 }
 
 async function importLayoutData(data) {
-  const layoutElements = getImportLayoutElements(data)
+  const layoutPages = getImportLayoutPages(data)
 
-  if (!layoutElements) {
+  if (!layoutPages?.length) {
     throw new Error('Choose a valid layout JSON file.')
   }
 
   const stats = { failedImages: 0 }
-  const importedElements = await Promise.all(
-    layoutElements.map(item => createImportedElement(item, stats))
-  )
-  const nextElements = importedElements.filter(Boolean)
+  const usedPageIds = new Set()
+  const nextPages = await Promise.all(layoutPages.map(async (page, index) => {
+    const importedElements = await Promise.all(
+      page.elements.map(item => createImportedElement(item, stats))
+    )
+    const importedId = String(page.id || '').trim()
+    const pageId = importedId && !usedPageIds.has(importedId)
+      ? importedId
+      : createPageId()
+
+    usedPageIds.add(pageId)
+
+    return {
+      id: pageId,
+      name: page.name || `Page ${index + 1}`,
+      elements: importedElements.filter(Boolean)
+    }
+  }))
+  const activeImportedPage = nextPages.find(page => page.id === data?.activePageId) || nextPages[0]
 
   applyImportedPageSettings(data?.page)
-  clearCanvas()
-  elements.value = nextElements
+  resetCanvasInteractionState()
+  richRenderVersions.clear()
+  pages.value = nextPages
+  activePageId.value = activeImportedPage.id
+  canvasVersion += 1
   await nextTick()
-  elements.value.forEach(renderImportedRichTextImages)
+  nextPages.forEach(page => {
+    page.elements.forEach(renderImportedRichTextImages)
+  })
 
   return {
-    elementCount: nextElements.length,
+    pageCount: nextPages.length,
+    elementCount: nextPages.reduce((count, page) => count + page.elements.length, 0),
     failedImages: stats.failedImages
   }
 }
@@ -6053,8 +6367,11 @@ async function importLayoutFile(event) {
     const imageWarning = result.failedImages
       ? ` ${result.failedImages} image${result.failedImages === 1 ? '' : 's'} could not be loaded.`
       : ''
+    const pageText = result.pageCount > 1
+      ? ` across ${result.pageCount} pages`
+      : ''
 
-    layoutImportMessage.value = `Imported ${result.elementCount} element${result.elementCount === 1 ? '' : 's'}.${imageWarning}`
+    layoutImportMessage.value = `Imported ${result.elementCount} element${result.elementCount === 1 ? '' : 's'}${pageText}.${imageWarning}`
   } catch (error) {
     layoutImportError.value = error?.message || 'Could not import this layout.'
   } finally {
@@ -6077,6 +6394,12 @@ onBeforeUnmount(() => {
 
   return {
     elements,
+    pages,
+    activePageId,
+    activePageIndex,
+    activePage,
+    activePageName,
+    hasMultiplePages,
     PX_PER_INCH,
     CM_PER_INCH,
     PAGE_OFFSET_X,
@@ -6205,6 +6528,13 @@ onBeforeUnmount(() => {
     canvasItems,
     hasCanvasElements,
     layerSidebarItems,
+    getPageTitle,
+    getAllPageElements,
+    selectPage,
+    addPage,
+    duplicatePage,
+    deletePage,
+    renamePage,
     tableItems,
     selectedItems,
     canDeleteSelected,
@@ -6619,6 +6949,7 @@ onBeforeUnmount(() => {
     isJpegDataUrl,
     getCanvasJpegDataUrl,
     createPdfBlobFromJpegDataUrl,
+    createPdfBlobFromJpegDataUrls,
     getPdfExportFileName,
     downloadBlobFile,
     getCurrentLayoutPdfBlob,
