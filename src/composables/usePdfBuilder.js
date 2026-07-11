@@ -126,10 +126,15 @@ function createPageId() {
   return `page-${Date.now()}-${generatedPageIdCounter}`
 }
 
-function createCanvasPage(name = '') {
+function getNormalizedPageOrientation(value) {
+  return value === 'landscape' ? 'landscape' : 'portrait'
+}
+
+function createCanvasPage(name = '', options = {}) {
   return {
     id: createPageId(),
     name: name || 'Page',
+    orientation: getNormalizedPageOrientation(options.orientation),
     elements: []
   }
 }
@@ -161,9 +166,29 @@ const elements = computed({
 
 const selectedPagePreset = ref('a4')
 const pageUnit = ref('cm')
-const pageOrientation = ref('portrait')
+const pageOrientation = computed({
+  get: () => getNormalizedPageOrientation(activePage.value?.orientation),
+  set: value => {
+    setActivePageOrientation(value)
+  }
+})
 const canvasColor = ref('#ffffff')
 const selectedPageMarginPreset = ref('normal')
+const pageNumberPositionOptions = [
+  { value: 'top-right', label: 'Right top' },
+  { value: 'bottom-right', label: 'Right bottom' },
+  { value: 'top-left', label: 'Left top' },
+  { value: 'bottom-left', label: 'Left bottom' }
+]
+const defaultPageNumberSettings = {
+  enabled: false,
+  position: 'bottom-right',
+  color: '#111827',
+  fontSize: 12,
+  fontFamily: fontOptions[0].value,
+  hideFirstPage: false
+}
+const pageNumberSettings = ref({ ...defaultPageNumberSettings })
 const customPageSizeInches = ref({
   width: 21 / CM_PER_INCH,
   height: 29.7 / CM_PER_INCH
@@ -192,7 +217,7 @@ const customPageHeight = computed({
     customPageSizeInches.value.height = getPageUnitInches(value)
   }
 })
-const pageSizeInches = computed(() => {
+function getPageSizeInchesForOrientation(orientation) {
   const preset = pageSizePresets.find(item => item.value === selectedPagePreset.value)
   let size
 
@@ -211,10 +236,21 @@ const pageSizeInches = computed(() => {
   const shortSide = Math.min(size.width, size.height)
   const longSide = Math.max(size.width, size.height)
 
-  return pageOrientation.value === 'landscape'
+  return getNormalizedPageOrientation(orientation) === 'landscape'
     ? { width: longSide, height: shortSide }
     : { width: shortSide, height: longSide }
-})
+}
+
+function getPagePixelSizeForOrientation(orientation) {
+  const sizeInches = getPageSizeInchesForOrientation(orientation)
+
+  return {
+    width: Math.round(sizeInches.width * PX_PER_INCH),
+    height: Math.round(sizeInches.height * PX_PER_INCH)
+  }
+}
+
+const pageSizeInches = computed(() => getPageSizeInchesForOrientation(pageOrientation.value))
 const pageMarginsInches = computed(() => {
   const preset = pageMarginPresets.find(item => item.value === selectedPageMarginPreset.value)
   const margins = preset?.marginsInches || customPageMarginsInches.value
@@ -248,10 +284,7 @@ const customPageMarginLeft = computed({
     customPageMarginsInches.value.left = getPageMarginUnitInches(value, 'left')
   }
 })
-const pagePixelSize = computed(() => ({
-  width: Math.round(pageSizeInches.value.width * PX_PER_INCH),
-  height: Math.round(pageSizeInches.value.height * PX_PER_INCH)
-}))
+const pagePixelSize = computed(() => getPagePixelSizeForOrientation(pageOrientation.value))
 const currentPageWidth = computed(() => formatPageDimension(convertInchesToPageUnit(pageSizeInches.value.width)))
 const currentPageHeight = computed(() => formatPageDimension(convertInchesToPageUnit(pageSizeInches.value.height)))
 const currentPageMargins = computed(() => ({
@@ -260,6 +293,54 @@ const currentPageMargins = computed(() => ({
   bottom: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.bottom)),
   left: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.left))
 }))
+
+function getNormalizedPageNumberPosition(value) {
+  return pageNumberPositionOptions.some(option => option.value === value)
+    ? value
+    : defaultPageNumberSettings.position
+}
+
+function getNormalizedPageNumberColor(value) {
+  return /^#[\da-f]{6}$/i.test(value || '')
+    ? value
+    : defaultPageNumberSettings.color
+}
+
+function getNormalizedPageNumberFontFamily(value) {
+  return fontOptions.some(option => option.value === value)
+    ? value
+    : defaultPageNumberSettings.fontFamily
+}
+
+function getNormalizedPageNumberFontSize(value) {
+  return clampNumber(Number(value) || defaultPageNumberSettings.fontSize, 6, 96)
+}
+
+function getNormalizedPageNumberSettings(settings = {}) {
+  return {
+    enabled: Boolean(settings.enabled),
+    position: getNormalizedPageNumberPosition(settings.position),
+    color: getNormalizedPageNumberColor(settings.color),
+    fontSize: getNormalizedPageNumberFontSize(settings.fontSize),
+    fontFamily: getNormalizedPageNumberFontFamily(settings.fontFamily),
+    hideFirstPage: Boolean(settings.hideFirstPage)
+  }
+}
+
+function getSerializablePageNumberSettings() {
+  return getNormalizedPageNumberSettings(pageNumberSettings.value)
+}
+
+function applyImportedPageNumberSettings(settings) {
+  pageNumberSettings.value = getNormalizedPageNumberSettings(settings)
+}
+
+function shouldShowPageNumberForIndex(index) {
+  const settings = getNormalizedPageNumberSettings(pageNumberSettings.value)
+
+  return settings.enabled && !(settings.hideFirstPage && index === 0)
+}
+
 const pageConfig = computed(() => ({
   width: pagePixelSize.value.width,
   height: pagePixelSize.value.height,
@@ -269,6 +350,37 @@ const pageConfig = computed(() => ({
   x: PAGE_OFFSET_X,
   y: PAGE_OFFSET_Y
 }))
+const pageNumberConfig = computed(() => {
+  if (!shouldShowPageNumberForIndex(activePageIndex.value)) return { visible: false }
+
+  const settings = getNormalizedPageNumberSettings(pageNumberSettings.value)
+  const config = pageConfig.value
+  const position = settings.position
+  const edgeOffset = 24
+  const lineHeight = 1.2
+  const height = Math.ceil(settings.fontSize * lineHeight)
+  const isBottom = position.startsWith('bottom')
+  const isRight = position.endsWith('right')
+
+  return {
+    visible: true,
+    listening: false,
+    text: String(activePageIndex.value + 1),
+    x: config.x + edgeOffset,
+    y: isBottom
+      ? config.y + config.height - edgeOffset - height
+      : config.y + edgeOffset,
+    width: Math.max(1, config.width - edgeOffset * 2),
+    height,
+    fill: settings.color,
+    fontSize: settings.fontSize,
+    fontFamily: settings.fontFamily,
+    lineHeight,
+    align: isRight ? 'right' : 'left',
+    verticalAlign: isBottom ? 'bottom' : 'top',
+    perfectDrawEnabled: false
+  }
+})
 const pageMarginGuideConfig = computed(() => {
   const margins = pageMarginsInches.value
   const left = Math.round(margins.left * PX_PER_INCH)
@@ -457,6 +569,22 @@ function getAllPageElements() {
   ))
 }
 
+function setPageOrientation(page, orientation) {
+  if (!page) return
+
+  const nextOrientation = getNormalizedPageOrientation(orientation)
+
+  if (page.orientation === nextOrientation) return
+
+  page.orientation = nextOrientation
+  canvasVersion += 1
+  nextTick(() => updateTransformerSelection())
+}
+
+function setActivePageOrientation(orientation) {
+  setPageOrientation(activePage.value, orientation)
+}
+
 function resetCanvasInteractionState() {
   if (editingId.value) finishTextEditing()
   if (editingTableCell.value) finishTableCellEditing()
@@ -481,7 +609,9 @@ function selectPage(pageId) {
 }
 
 function addPage() {
-  const page = createCanvasPage(`Page ${pages.value.length + 1}`)
+  const page = createCanvasPage(`Page ${pages.value.length + 1}`, {
+    orientation: pageOrientation.value
+  })
 
   pages.value.push(page)
   selectPage(page.id)
@@ -494,7 +624,9 @@ function duplicatePage(pageId = activePageId.value) {
   if (!sourcePage) return
 
   const usedIds = collectCanvasItemIds(getAllPageElements())
-  const page = createCanvasPage(`${getPageTitle(sourcePage, sourceIndex)} Copy`)
+  const page = createCanvasPage(`${getPageTitle(sourcePage, sourceIndex)} Copy`, {
+    orientation: sourcePage.orientation
+  })
 
   page.elements = sourcePage.elements.map(item => {
     const clonedItem = cloneCanvasItem(item)
@@ -5829,6 +5961,9 @@ async function serializeLayoutElement(item, options = {}) {
 }
 
 async function serializeCanvasPage(page, index, options = {}) {
+  const orientation = getNormalizedPageOrientation(page?.orientation)
+  const sizeInches = getPageSizeInchesForOrientation(orientation)
+  const sizePixels = getPagePixelSizeForOrientation(orientation)
   const serializedElements = await Promise.all(
     (Array.isArray(page?.elements) ? page.elements : [])
       .map(item => serializeLayoutElement(item, options))
@@ -5837,6 +5972,9 @@ async function serializeCanvasPage(page, index, options = {}) {
   return {
     id: page.id,
     name: getPageTitle(page, index),
+    orientation,
+    sizeInches,
+    sizePixels,
     elements: serializedElements,
     variables: getTemplateVariablesFromElements(serializedElements)
   }
@@ -5861,6 +5999,7 @@ async function createLayoutExportData(options = {}) {
     exportedAt: new Date().toISOString(),
     activePageId: activePageId.value,
     pageCount: serializedPages.length,
+    pageNumbering: getSerializablePageNumberSettings(),
     page: {
       preset: selectedPagePreset.value,
       unit: pageUnit.value,
@@ -6024,12 +6163,15 @@ function getImportLayoutElements(data) {
 }
 
 function getImportLayoutPages(data) {
+  const fallbackOrientation = getNormalizedPageOrientation(data?.page?.orientation)
+
   if (Array.isArray(data?.pages)) {
     return data.pages
       .filter(page => page && typeof page === 'object' && Array.isArray(page.elements))
       .map((page, index) => ({
         id: typeof page.id === 'string' ? page.id : '',
         name: typeof page.name === 'string' ? page.name : `Page ${index + 1}`,
+        orientation: getNormalizedPageOrientation(page.orientation || fallbackOrientation),
         elements: page.elements
       }))
   }
@@ -6040,6 +6182,7 @@ function getImportLayoutPages(data) {
     return [{
       id: '',
       name: 'Page 1',
+      orientation: fallbackOrientation,
       elements: layoutElements
     }]
   }
@@ -6235,7 +6378,6 @@ function applyImportedPageSettings(page) {
   if (!page || typeof page !== 'object') return
 
   if (['cm', 'in'].includes(page.unit)) pageUnit.value = page.unit
-  if (['portrait', 'landscape'].includes(page.orientation)) pageOrientation.value = page.orientation
   if (/^#[\da-f]{6}$/i.test(page.canvasColor || '')) canvasColor.value = page.canvasColor
   if (pageSizePresets.some(preset => preset.value === page.preset)) selectedPagePreset.value = page.preset
   if (pageMarginPresets.some(preset => preset.value === page.marginPreset)) selectedPageMarginPreset.value = page.marginPreset
@@ -6321,12 +6463,14 @@ async function importLayoutData(data) {
     return {
       id: pageId,
       name: page.name || `Page ${index + 1}`,
+      orientation: getNormalizedPageOrientation(page.orientation),
       elements: importedElements.filter(Boolean)
     }
   }))
   const activeImportedPage = nextPages.find(page => page.id === data?.activePageId) || nextPages[0]
 
   applyImportedPageSettings(data?.page)
+  applyImportedPageNumberSettings(data?.pageNumbering || data?.pageNumbers || data?.page?.numbering)
   resetCanvasInteractionState()
   richRenderVersions.clear()
   pages.value = nextPages
@@ -6415,6 +6559,8 @@ onBeforeUnmount(() => {
     pageOrientation,
     canvasColor,
     selectedPageMarginPreset,
+    pageNumberPositionOptions,
+    pageNumberSettings,
     customPageSizeInches,
     customPageMarginsInches,
     pageDimensionStep,
@@ -6436,6 +6582,7 @@ onBeforeUnmount(() => {
     currentPageHeight,
     currentPageMargins,
     pageConfig,
+    pageNumberConfig,
     pageMarginGuideConfig,
     pageClipConfig,
     stageConfig,

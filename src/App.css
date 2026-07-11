@@ -399,6 +399,43 @@
   cursor: not-allowed;
 }
 
+.page-number-settings {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.page-number-style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.page-number-style-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #334155;
+  font-size: 11px;
+}
+
+.page-number-style-grid input {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.page-number-settings select:disabled,
+.page-number-settings input:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
 .image-editor-panel {
   display: flex;
   flex-direction: column;

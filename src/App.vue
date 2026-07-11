@@ -170,7 +170,10 @@ export default {
               @click="selectPage(page.id)"
           >
             <span>{{ getPageTitle(page, index) }}</span>
-            <small>{{ page.elements.length }} item{{ page.elements.length === 1 ? '' : 's' }}</small>
+            <small>
+              {{ page.orientation === 'landscape' ? 'Landscape' : 'Portrait' }}
+              / {{ page.elements.length }} item{{ page.elements.length === 1 ? '' : 's' }}
+            </small>
           </button>
         </div>
 
@@ -193,6 +196,78 @@ export default {
           >
             {{ hasMultiplePages ? 'Delete' : 'Clear' }}
           </button>
+        </div>
+
+        <div class="page-number-settings">
+          <label class="checkbox-control">
+            <span>Page numbers</span>
+            <input v-model="pageNumberSettings.enabled" type="checkbox">
+          </label>
+
+          <label class="control-row">
+            <span>Position</span>
+            <select
+                v-model="pageNumberSettings.position"
+                class="control-select"
+                :disabled="!pageNumberSettings.enabled"
+            >
+              <option
+                  v-for="option in pageNumberPositionOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <div class="page-number-style-grid">
+            <label>
+              <span>Color</span>
+              <input
+                  v-model="pageNumberSettings.color"
+                  type="color"
+                  :disabled="!pageNumberSettings.enabled"
+              >
+            </label>
+            <label>
+              <span>Size</span>
+              <input
+                  v-model.number="pageNumberSettings.fontSize"
+                  type="number"
+                  min="6"
+                  max="96"
+                  step="1"
+                  :disabled="!pageNumberSettings.enabled"
+              >
+            </label>
+          </div>
+
+          <label class="control-row">
+            <span>Font</span>
+            <select
+                v-model="pageNumberSettings.fontFamily"
+                class="control-select"
+                :disabled="!pageNumberSettings.enabled"
+            >
+              <option
+                  v-for="font in fontOptions"
+                  :key="font.value"
+                  :value="font.value"
+              >
+                {{ font.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="checkbox-control">
+            <span>Hide first page</span>
+            <input
+                v-model="pageNumberSettings.hideFirstPage"
+                type="checkbox"
+                :disabled="!pageNumberSettings.enabled"
+            >
+          </label>
         </div>
       </div>
 
@@ -1462,6 +1537,11 @@ export default {
                 <v-rect v-if="item.type === 'rect'" :config="item" />
                 <v-text v-if="item.type === 'text'" :config="item" />
               </template>
+
+              <v-text
+                  v-if="pageNumberConfig.visible"
+                  :config="pageNumberConfig"
+              />
             </v-group>
 
             <v-transformer
