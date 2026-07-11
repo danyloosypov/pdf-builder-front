@@ -236,6 +236,27 @@ export class PieChartElement extends CanvasElement {
   }
 }
 
+export class TableElement extends CanvasElement {
+  constructor(config = {}) {
+    super({
+      id: createId(),
+      type: 'table',
+      x: 200,
+      y: 200,
+      width: 300,
+      height: 120,
+      rotation: 0,
+      rows: 3,
+      cols: 3,
+      draggable: true,
+      colWidths: [100, 100, 100],
+      rowHeights: [40, 40, 40],
+      cells: [],
+      ...config
+    })
+  }
+}
+
 export class GroupElement extends CanvasElement {
   constructor(config = {}) {
     super({

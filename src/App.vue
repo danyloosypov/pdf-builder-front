@@ -251,7 +251,33 @@ export default {
               <p v-if="barcodeError" class="field-error">{{ barcodeError }}</p>
             </div>
 
-            <button type="button" @click="addTable">Table</button>
+            <div class="table-create-panel">
+              <div class="table-create-grid">
+                <label>
+                  <span>Rows</span>
+                  <input
+                      :value="tableRowsInput"
+                      type="number"
+                      min="1"
+                      max="30"
+                      step="1"
+                      @input="setTableRowsInput($event.target.value)"
+                  >
+                </label>
+                <label>
+                  <span>Columns</span>
+                  <input
+                      :value="tableColsInput"
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      @input="setTableColsInput($event.target.value)"
+                  >
+                </label>
+              </div>
+              <button type="button" @click="addTable">Add Table</button>
+            </div>
           </div>
         </div>
       </div>
@@ -452,6 +478,147 @@ export default {
               @input="setElementRotation(selectedItem, $event.target.value)"
           >
         </label>
+      </div>
+
+      <div v-if="selectedTable" class="image-editor-panel table-settings-panel">
+        <div class="panel-title">Table Settings</div>
+
+        <div class="layer-readout">
+          {{ selectedTable.rows }} x {{ selectedTable.cols }}
+          <span v-if="selectedTableCells.length"> - {{ selectedTableCells.length }} selected</span>
+        </div>
+
+        <div v-if="selectedTableCells.length" class="table-cell-settings">
+          <div class="chart-color-grid">
+            <label>
+              <span>Cell</span>
+              <input
+                  :value="getSelectedTableCellStyleValue('fill', '#ffffff')"
+                  type="color"
+                  @input="setSelectedTableCellsStyle({ fill: $event.target.value })"
+              >
+            </label>
+            <label>
+              <span>Text</span>
+              <input
+                  :value="getSelectedTableCellStyleValue('textColor', '#111827')"
+                  type="color"
+                  @input="setSelectedTableCellsStyle({ textColor: $event.target.value })"
+              >
+            </label>
+          </div>
+
+          <div class="control-row">
+            <span>Text Align</span>
+            <div class="segmented-control">
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('textAlign', 'left') === 'left' }"
+                  @click="setSelectedTableCellsStyle({ textAlign: 'left' })"
+              >
+                Left
+              </button>
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('textAlign', 'left') === 'center' }"
+                  @click="setSelectedTableCellsStyle({ textAlign: 'center' })"
+              >
+                Center
+              </button>
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('textAlign', 'left') === 'right' }"
+                  @click="setSelectedTableCellsStyle({ textAlign: 'right' })"
+              >
+                Right
+              </button>
+            </div>
+          </div>
+
+          <div class="control-row">
+            <span>Vertical Align</span>
+            <div class="segmented-control">
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('verticalAlign', 'middle') === 'top' }"
+                  @click="setSelectedTableCellsStyle({ verticalAlign: 'top' })"
+              >
+                Top
+              </button>
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('verticalAlign', 'middle') === 'middle' }"
+                  @click="setSelectedTableCellsStyle({ verticalAlign: 'middle' })"
+              >
+                Middle
+              </button>
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('verticalAlign', 'middle') === 'bottom' }"
+                  @click="setSelectedTableCellsStyle({ verticalAlign: 'bottom' })"
+              >
+                Bottom
+              </button>
+            </div>
+          </div>
+
+          <div class="chart-color-grid">
+            <label>
+              <span>Border</span>
+              <input
+                  :value="getSelectedTableCellStyleValue('borderColor', '#111827')"
+                  type="color"
+                  @input="setSelectedTableCellsStyle({ borderColor: $event.target.value })"
+              >
+            </label>
+          </div>
+
+          <label class="control-row">
+            <span>Border Width</span>
+            <input
+                :value="getSelectedTableCellStyleValue('borderWidth', 1)"
+                type="range"
+                min="0"
+                max="24"
+                step="1"
+                @input="setSelectedTableCellsStyle({ borderWidth: $event.target.value })"
+            >
+            <input
+                :value="getSelectedTableCellStyleValue('borderWidth', 1)"
+                class="number-input"
+                type="number"
+                min="0"
+                max="24"
+                step="1"
+                @input="setSelectedTableCellsStyle({ borderWidth: $event.target.value })"
+            >
+          </label>
+
+          <label class="control-row">
+            <span>Border Style</span>
+            <select
+                :value="getSelectedTableCellStyleValue('borderStyle', 'solid')"
+                class="control-select"
+                @change="setSelectedTableCellsStyle({ borderStyle: $event.target.value })"
+            >
+              <option
+                  v-for="option in borderStyleOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <button
+              type="button"
+              :disabled="selectedTableCells.length < 2"
+              @click="mergeSelectedTableCells"
+          >
+            Merge Cells
+          </button>
+        </div>
       </div>
 
       <div v-if="selectedText" class="image-editor-panel">
@@ -1057,12 +1224,22 @@ export default {
                   :get-pie-chart-title-config="getPieChartTitleConfig"
                   :get-pie-chart-slice-configs="getPieChartSliceConfigs"
                   :get-pie-chart-label-configs="getPieChartLabelConfigs"
+                  :get-visible-table-cells="getVisibleTableCells"
+                  :get-table-config="getTableConfig"
+                  :get-table-cell-group-config="getTableCellGroupConfig"
+                  :get-table-cell-rect-config="getTableCellRectConfig"
+                  :get-table-cell-text-config="getTableCellTextConfig"
+                  :get-table-cell-selection-config="getTableCellSelectionConfig"
+                  :get-table-border-line-configs="getTableBorderLineConfigs"
                   :get-shape-text-image-config="getShapeTextImageConfig"
                   @selectable-pointer-down="handleSelectablePointerDown"
                   @selectable-click="stopSelectableClick"
                   @selectable-context-menu="handleSelectableContextMenu"
                   @text-edit="startTextEditing"
                   @shape-text-edit="startShapeTextEditing"
+                  @table-cell-pointer-down="handleTableCellPointerDown"
+                  @table-cell-edit="startTableCellEditing"
+                  @table-cell-context-menu="handleTableCellContextMenu"
                   @position-update="updatePosition"
                   @position-drag="updatePositionDuringDrag"
                   @transform-update="updateTransform"
@@ -1089,7 +1266,15 @@ export default {
             @mousedown="handleContextMenuMouseDown"
             @contextmenu.prevent
         >
-          <template v-if="contextMenu.type === 'element'">
+          <template v-if="contextMenu.type === 'table-cell'">
+            <button type="button" @click="addTableRowFromContext">Add Row</button>
+            <button type="button" @click="addTableColumnFromContext">Add Column</button>
+            <button type="button" @click="deleteTableRowFromContext">Delete Row</button>
+            <button type="button" @click="deleteTableColumnFromContext">Delete Column</button>
+            <button type="button" @click="splitTableCellVerticallyFromContext">Split Vertical</button>
+            <button type="button" @click="splitTableCellHorizontallyFromContext">Split Horizontal</button>
+          </template>
+          <template v-else-if="contextMenu.type === 'element'">
             <button type="button" @click="copyContextMenuElement">Copy</button>
             <button type="button" @click="deleteContextMenuElement">Delete</button>
           </template>
@@ -1102,6 +1287,18 @@ export default {
             Paste
           </button>
         </div>
+
+        <textarea
+            v-if="editingTableCell && tableCellEditorStyle"
+            class="table-cell-editor"
+            :style="tableCellEditorStyle"
+            :value="tableCellEditorValue"
+            @input="handleTableCellEditorInput($event.target.value)"
+            @keydown="handleTableCellEditorKeydown"
+            @blur="finishTableCellEditing"
+            @mousedown.stop
+            @contextmenu.stop
+        />
 
         <div
             v-if="editingItem && editor"

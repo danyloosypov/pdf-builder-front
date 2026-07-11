@@ -17,6 +17,7 @@ import {
   RectElement,
   RegularPolygonElement,
   RightTriangleElement,
+  TableElement,
   TextElement
 } from '../models/canvasElements'
 
@@ -238,6 +239,11 @@ const sidebarElementTabs = [
   { id: 'images', label: 'Изображения' },
   { id: 'other', label: 'Другое' }
 ]
+const tableRowsInput = ref(3)
+const tableColsInput = ref(3)
+const selectedTableCellIds = ref([])
+const editingTableCell = ref(null)
+const tableCellEditorValue = ref('')
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
 const isImageDragActive = ref(false)
@@ -254,6 +260,7 @@ const contextMenu = ref({
   type: 'canvas',
   positionMode: 'stage',
   targetId: null,
+  cellId: null,
   x: 0,
   y: 0,
   pastePoint: null
@@ -277,11 +284,27 @@ const defaultTextSettings = {
   lineHeight: 1.35,
   letterSpacing: 0
 }
+const defaultTableCellSettings = {
+  fill: '#ffffff',
+  textColor: '#111827',
+  fontSize: 14,
+  textAlign: 'left',
+  verticalAlign: 'middle',
+  borderColor: '#111827',
+  borderWidth: 1,
+  borderStyle: 'solid'
+}
+const MIN_TABLE_ROWS = 1
+const MAX_TABLE_ROWS = 30
+const MIN_TABLE_COLS = 1
+const MAX_TABLE_COLS = 20
+const DEFAULT_TABLE_CELL_WIDTH = 100
+const DEFAULT_TABLE_CELL_HEIGHT = 40
 const CLIPBOARD_PASTE_OFFSET = 24
 const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
 const regularPolygonShapeTypes = ['polygon', 'triangle']
 const borderableElementTypes = ['text', 'image', 'label', 'chart']
-const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
+const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow', 'table']
 const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle']
 const cornerRadiusFields = [
   { label: 'Top left', index: 0 },
@@ -585,6 +608,15 @@ const canGroupSelected = computed(() => (
 ))
 const selectedText = computed(() => selectedItem.value?.type === 'text' && !selectedItem.value.tableGroup ? selectedItem.value : null)
 const selectedGroup = computed(() => selectedItem.value?.type === 'group' ? selectedItem.value : null)
+const selectedTable = computed(() => selectedItem.value?.type === 'table' ? selectedItem.value : null)
+const selectedTableCells = computed(() => {
+  if (!selectedTable.value) return []
+
+  const selectedCellIdSet = new Set(selectedTableCellIds.value.map(String))
+
+  return getVisibleTableCells(selectedTable.value)
+    .filter(cell => selectedCellIdSet.has(String(cell.id)))
+})
 const selectedLabel = computed(() => {
   const item = selectedItem.value
 
@@ -603,6 +635,16 @@ const selectedShape = computed(() => {
   return item
 })
 const editingItem = computed(() => elements.value.find(i => i.id === editingId.value) || null)
+const tableCellEditorStyle = computed(() => {
+  if (!editingTableCell.value) return null
+
+  const table = getCanvasItemById(editingTableCell.value.tableId)
+  const cell = getTableCellById(table, editingTableCell.value.cellId)
+
+  if (!table || !cell) return null
+
+  return getTableCellEditorStyle(table, cell)
+})
 const transformerConfig = computed(() => {
   const freeResizeAnchors = [
     'top-left',
@@ -1073,55 +1115,758 @@ function addPieChart() {
   nextTick(() => selectElement(id))
 }
 
-function addTable() {
-  const rows = 3
-  const cols = 3
-  const cellW = 100
-  const cellH = 40
-  const groupId = Date.now()
-  const children = []
+function getTableDimensionValue(value, min, max, fallback) {
+  const numericValue = Math.round(Number.parseFloat(value))
 
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      children.push({
-        id: `${groupId}-cell-${r}-${c}`,
-        type: 'rect',
-        x: c * cellW,
-        y: r * cellH,
-        width: cellW,
-        height: cellH,
-        fill: '#fff',
-        stroke: '#000',
-        strokeWidth: 1,
-        draggable: false
-      })
+  if (!Number.isFinite(numericValue)) return fallback
 
-      children.push({
-        id: `${groupId}-text-${r}-${c}`,
-        type: 'text',
-        text: `${r},${c}`,
-        x: c * cellW + 10,
-        y: r * cellH + 10,
-        fontSize: 14,
-        draggable: false
-      })
+  return clampNumber(numericValue, min, max)
+}
+
+function setTableRowsInput(value) {
+  tableRowsInput.value = getTableDimensionValue(value, MIN_TABLE_ROWS, MAX_TABLE_ROWS, tableRowsInput.value)
+}
+
+function setTableColsInput(value) {
+  tableColsInput.value = getTableDimensionValue(value, MIN_TABLE_COLS, MAX_TABLE_COLS, tableColsInput.value)
+}
+
+function createTableCellId(tableId, row, col) {
+  generatedCanvasIdCounter += 1
+
+  return `${tableId}-cell-${row}-${col}-${generatedCanvasIdCounter}`
+}
+
+function getTableCellCoordinates(cell) {
+  return {
+    row: Math.max(0, Math.round(Number(cell?.row) || 0)),
+    col: Math.max(0, Math.round(Number(cell?.col) || 0)),
+    rowSpan: Math.max(1, Math.round(Number(cell?.rowSpan) || 1)),
+    colSpan: Math.max(1, Math.round(Number(cell?.colSpan) || 1))
+  }
+}
+
+function createTableCell(tableId, row, col, overrides = {}) {
+  return {
+    id: createTableCellId(tableId, row, col),
+    row,
+    col,
+    rowSpan: 1,
+    colSpan: 1,
+    text: '',
+    ...defaultTableCellSettings,
+    ...overrides
+  }
+}
+
+function createDefaultTableCells(tableId, rows, cols) {
+  const cells = []
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      cells.push(createTableCell(tableId, row, col))
     }
   }
 
-  elements.value.push(new GroupElement({
-    id: groupId,
-    title: 'Table',
-    groupKind: 'table',
-    tableRows: rows,
-    tableCols: cols,
-    x: 200,
-    y: 200,
-    width: cols * cellW,
-    height: rows * cellH,
-    children
+  return cells
+}
+
+function ensureTableCellSettings(cell, tableId) {
+  const coordinates = getTableCellCoordinates(cell)
+
+  return {
+    id: cell.id ?? createTableCellId(tableId, coordinates.row, coordinates.col),
+    row: coordinates.row,
+    col: coordinates.col,
+    rowSpan: coordinates.rowSpan,
+    colSpan: coordinates.colSpan,
+    text: cell.text ?? '',
+    fill: getHexColor(cell.fill, defaultTableCellSettings.fill),
+    textColor: getHexColor(cell.textColor, defaultTableCellSettings.textColor),
+    fontSize: Math.max(6, Math.round(Number(cell.fontSize) || defaultTableCellSettings.fontSize)),
+    textAlign: ['left', 'center', 'right'].includes(cell.textAlign) ? cell.textAlign : defaultTableCellSettings.textAlign,
+    verticalAlign: ['top', 'middle', 'bottom'].includes(cell.verticalAlign) ? cell.verticalAlign : defaultTableCellSettings.verticalAlign,
+    borderColor: getHexColor(cell.borderColor, defaultTableCellSettings.borderColor),
+    borderWidth: getBorderWidthValue(cell.borderWidth ?? defaultTableCellSettings.borderWidth),
+    borderStyle: getShapeBorderStyle(cell.borderStyle || defaultTableCellSettings.borderStyle)
+  }
+}
+
+function normalizeTableCells(table) {
+  const rows = table.rows
+  const cols = table.cols
+  const occupied = new Set()
+  const normalizedCells = []
+  const sourceCells = Array.isArray(table.cells) && table.cells.length
+    ? table.cells
+    : createDefaultTableCells(table.id, rows, cols)
+
+  sourceCells
+    .map(cell => ensureTableCellSettings(cell, table.id))
+    .sort((a, b) => a.row - b.row || a.col - b.col)
+    .forEach(cell => {
+      if (cell.row >= rows || cell.col >= cols) return
+
+      cell.rowSpan = clampNumber(cell.rowSpan, 1, rows - cell.row)
+      cell.colSpan = clampNumber(cell.colSpan, 1, cols - cell.col)
+
+      let overlaps = false
+
+      for (let row = cell.row; row < cell.row + cell.rowSpan; row += 1) {
+        for (let col = cell.col; col < cell.col + cell.colSpan; col += 1) {
+          if (occupied.has(`${row}:${col}`)) overlaps = true
+        }
+      }
+
+      if (overlaps) return
+
+      normalizedCells.push(cell)
+
+      for (let row = cell.row; row < cell.row + cell.rowSpan; row += 1) {
+        for (let col = cell.col; col < cell.col + cell.colSpan; col += 1) {
+          occupied.add(`${row}:${col}`)
+        }
+      }
+    })
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if (!occupied.has(`${row}:${col}`)) {
+        normalizedCells.push(createTableCell(table.id, row, col))
+      }
+    }
+  }
+
+  table.cells = normalizedCells.sort((a, b) => a.row - b.row || a.col - b.col)
+}
+
+function getTableTrackSizes(table, key, count, total, defaultSize) {
+  const source = Array.isArray(table?.[key]) ? table[key] : []
+  const normalizedTotal = Math.max(count, Number(total) || count * defaultSize)
+  const fallbackSize = normalizedTotal / Math.max(1, count)
+  const sizes = Array.from({ length: count }, (_, index) => (
+    Math.max(1, Number(source[index]) || fallbackSize)
+  ))
+  const sizeTotal = sizes.reduce((sum, size) => sum + size, 0)
+  const scale = sizeTotal > 0 ? normalizedTotal / sizeTotal : 1
+
+  return sizes.map(size => size * scale)
+}
+
+function getTableColumnWidths(table) {
+  return getTableTrackSizes(table, 'colWidths', table.cols, table.width, DEFAULT_TABLE_CELL_WIDTH)
+}
+
+function getTableRowHeights(table) {
+  return getTableTrackSizes(table, 'rowHeights', table.rows, table.height, DEFAULT_TABLE_CELL_HEIGHT)
+}
+
+function ensureTableTrackSettings(table) {
+  table.colWidths = getTableColumnWidths(table)
+  table.rowHeights = getTableRowHeights(table)
+}
+
+function getTableTrackOffset(sizes, index) {
+  return sizes
+    .slice(0, index)
+    .reduce((sum, size) => sum + size, 0)
+}
+
+function getTableTrackSpanSize(sizes, start, span) {
+  return sizes
+    .slice(start, start + span)
+    .reduce((sum, size) => sum + size, 0)
+}
+
+function ensureTableSettings(item) {
+  if (!item || item.type !== 'table') return
+
+  item.rows = getTableDimensionValue(item.rows, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
+  item.cols = getTableDimensionValue(item.cols, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
+  item.width = Math.max(item.cols * 16, Number(item.width) || item.cols * DEFAULT_TABLE_CELL_WIDTH)
+  item.height = Math.max(item.rows * 16, Number(item.height) || item.rows * DEFAULT_TABLE_CELL_HEIGHT)
+  item.rotation = normalizeElementRotation(item.rotation || 0)
+  item.draggable = item.draggable !== false
+
+  ensureTableTrackSettings(item)
+  normalizeTableCells(item)
+}
+
+function getVisibleTableCells(table) {
+  if (!table || table.type !== 'table') return []
+
+  return Array.isArray(table.cells) ? table.cells : []
+}
+
+function getTableCellById(table, cellId) {
+  if (!table || !cellId) return null
+
+  return getVisibleTableCells(table).find(cell => String(cell.id) === String(cellId)) || null
+}
+
+function getTableCellLayout(table, cell) {
+  const colWidths = getTableColumnWidths(table)
+  const rowHeights = getTableRowHeights(table)
+
+  return {
+    x: getTableTrackOffset(colWidths, cell.col),
+    y: getTableTrackOffset(rowHeights, cell.row),
+    width: getTableTrackSpanSize(colWidths, cell.col, cell.colSpan),
+    height: getTableTrackSpanSize(rowHeights, cell.row, cell.rowSpan)
+  }
+}
+
+function getTableConfig(item) {
+  return {
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    rotation: item.rotation || 0,
+    draggable: item.draggable !== false
+  }
+}
+
+function getTableCellGroupConfig(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+
+  return {
+    x: layout.x,
+    y: layout.y
+  }
+}
+
+function getTableCellRectConfig(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+
+  return {
+    x: 0,
+    y: 0,
+    width: layout.width,
+    height: layout.height,
+    fill: cell.fill || defaultTableCellSettings.fill,
+    strokeWidth: 0,
+    listening: true
+  }
+}
+
+function getTableCellTextConfig(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+
+  return {
+    x: 0,
+    y: 0,
+    width: layout.width,
+    height: layout.height,
+    text: String(cell.text || ''),
+    fill: cell.textColor || defaultTableCellSettings.textColor,
+    fontSize: cell.fontSize || defaultTableCellSettings.fontSize,
+    fontFamily: 'Arial, sans-serif',
+    padding: 6,
+    align: cell.textAlign || defaultTableCellSettings.textAlign,
+    verticalAlign: cell.verticalAlign || defaultTableCellSettings.verticalAlign,
+    listening: false
+  }
+}
+
+function getTableCellSelectionConfig(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+
+  return {
+    x: 0,
+    y: 0,
+    width: layout.width,
+    height: layout.height,
+    fill: 'rgba(37,99,235,0.12)',
+    stroke: '#2563eb',
+    strokeWidth: 2,
+    listening: false,
+    visible: selectedTableCellIds.value.map(String).includes(String(cell.id))
+  }
+}
+
+function getTableBorderEdgeKey(x1, y1, x2, y2) {
+  const start = `${Number(x1).toFixed(3)}:${Number(y1).toFixed(3)}`
+  const end = `${Number(x2).toFixed(3)}:${Number(y2).toFixed(3)}`
+
+  return start < end ? `${start}|${end}` : `${end}|${start}`
+}
+
+function getTableCellBorderEdges(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+  const x = layout.x
+  const y = layout.y
+  const right = layout.x + layout.width
+  const bottom = layout.y + layout.height
+
+  return [
+    [x, y, right, y],
+    [right, y, right, bottom],
+    [right, bottom, x, bottom],
+    [x, bottom, x, y]
+  ]
+}
+
+function getTableBorderLineConfigs(table) {
+  const edgeMap = new Map()
+  const selectedCellIdSet = new Set(selectedTableCellIds.value.map(String))
+
+  getVisibleTableCells(table).forEach(cell => {
+    const isSelected = selectedCellIdSet.has(String(cell.id))
+    const borderWidth = getBorderWidthValue(cell.borderWidth)
+
+    getTableCellBorderEdges(table, cell).forEach(([x1, y1, x2, y2], index) => {
+      const key = getTableBorderEdgeKey(x1, y1, x2, y2)
+      const existing = edgeMap.get(key)
+
+      if (existing?.isSelected && !isSelected) return
+
+      edgeMap.set(key, {
+        id: `${cell.id}-edge-${index}`,
+        isSelected,
+        points: [x1, y1, x2, y2],
+        stroke: cell.borderColor || defaultTableCellSettings.borderColor,
+        strokeWidth: borderWidth,
+        listening: false,
+        ...getBorderLineConfig(cell.borderStyle, borderWidth)
+      })
+    })
+  })
+
+  return Array.from(edgeMap.values())
+    .filter(line => line.strokeWidth > 0)
+    .map(({ isSelected, ...line }) => line)
+}
+
+function getTableCellEditorStyle(table, cell) {
+  const layout = getTableCellLayout(table, cell)
+  const point = getRotatedPoint(table.x, table.y, layout.x, layout.y, table.rotation || 0)
+
+  return {
+    left: `${point.x}px`,
+    top: `${point.y}px`,
+    width: `${Math.max(1, layout.width)}px`,
+    height: `${Math.max(1, layout.height)}px`,
+    color: cell.textColor || defaultTableCellSettings.textColor,
+    background: cell.fill || defaultTableCellSettings.fill,
+    fontSize: `${cell.fontSize || defaultTableCellSettings.fontSize}px`,
+    textAlign: cell.textAlign || defaultTableCellSettings.textAlign,
+    transform: `rotate(${table.rotation || 0}deg)`,
+    transformOrigin: 'top left'
+  }
+}
+
+function isTableCellSelected(cellId) {
+  return selectedTableCellIds.value.map(String).includes(String(cellId))
+}
+
+function selectTableCell(tableId, cellId, options = {}) {
+  const table = getCanvasItemById(tableId)
+  const cell = getTableCellById(table, cellId)
+
+  if (!table || !cell) return
+
+  if (selectedId.value !== table.id) selectElement(table.id)
+
+  const currentIds = selectedTableCellIds.value.map(String)
+  const cellIdString = String(cell.id)
+
+  if (options.toggle) {
+    selectedTableCellIds.value = currentIds.includes(cellIdString)
+      ? selectedTableCellIds.value.filter(id => String(id) !== cellIdString)
+      : [...selectedTableCellIds.value, cell.id]
+  } else {
+    selectedTableCellIds.value = [cell.id]
+  }
+}
+
+function getTableCellContext(tableId, cellId) {
+  const table = getCanvasItemById(tableId)
+  const cell = getTableCellById(table, cellId)
+
+  return { table, cell }
+}
+
+function getSelectedTableCellStyleValue(property, fallback) {
+  const cells = selectedTableCells.value
+  const source = cells.length ? cells[0] : null
+
+  return source?.[property] ?? fallback
+}
+
+function setSelectedTableCellsStyle(attrs) {
+  const cells = selectedTableCells.value
+
+  cells.forEach(cell => {
+    Object.entries(attrs).forEach(([key, value]) => {
+      if (key === 'fill' || key === 'textColor' || key === 'borderColor') {
+        cell[key] = getHexColor(value, cell[key] || defaultTableCellSettings[key])
+        return
+      }
+
+      if (key === 'borderWidth') {
+        cell.borderWidth = getBorderWidthValue(value)
+        return
+      }
+
+      if (key === 'borderStyle') {
+        cell.borderStyle = getShapeBorderStyle(value)
+        return
+      }
+
+      cell[key] = value
+    })
+  })
+}
+
+function cloneTableCellStyle(cell) {
+  return {
+    fill: cell.fill,
+    textColor: cell.textColor,
+    fontSize: cell.fontSize,
+    textAlign: cell.textAlign,
+    verticalAlign: cell.verticalAlign,
+    borderColor: cell.borderColor,
+    borderWidth: cell.borderWidth,
+    borderStyle: cell.borderStyle
+  }
+}
+
+function fillMissingTableCells(table) {
+  normalizeTableCells(table)
+}
+
+function insertTableRow(table, rowIndex) {
+  if (!table) return
+
+  ensureTableTrackSettings(table)
+
+  const insertAt = clampNumber(rowIndex, 0, table.rows)
+  const sourceIndex = clampNumber(insertAt, 0, Math.max(0, table.rowHeights.length - 1))
+  const insertedHeight = table.rowHeights[sourceIndex] || DEFAULT_TABLE_CELL_HEIGHT
+
+  table.cells.forEach(cell => {
+    if (cell.row >= insertAt) {
+      cell.row += 1
+    } else if (cell.row + cell.rowSpan > insertAt) {
+      cell.rowSpan += 1
+    }
+  })
+
+  table.rows += 1
+  table.rowHeights.splice(insertAt, 0, insertedHeight)
+  table.height += insertedHeight
+  fillMissingTableCells(table)
+}
+
+function insertTableColumn(table, colIndex) {
+  if (!table) return
+
+  ensureTableTrackSettings(table)
+
+  const insertAt = clampNumber(colIndex, 0, table.cols)
+  const sourceIndex = clampNumber(insertAt, 0, Math.max(0, table.colWidths.length - 1))
+  const insertedWidth = table.colWidths[sourceIndex] || DEFAULT_TABLE_CELL_WIDTH
+
+  table.cells.forEach(cell => {
+    if (cell.col >= insertAt) {
+      cell.col += 1
+    } else if (cell.col + cell.colSpan > insertAt) {
+      cell.colSpan += 1
+    }
+  })
+
+  table.cols += 1
+  table.colWidths.splice(insertAt, 0, insertedWidth)
+  table.width += insertedWidth
+  fillMissingTableCells(table)
+}
+
+function deleteTableRow(table, rowIndex) {
+  if (!table || table.rows <= 1) return
+
+  ensureTableTrackSettings(table)
+
+  const targetRow = clampNumber(rowIndex, 0, table.rows - 1)
+  const removedHeight = table.rowHeights[targetRow] || table.height / table.rows
+
+  table.cells = table.cells
+    .map(cell => {
+      if (targetRow >= cell.row && targetRow < cell.row + cell.rowSpan) {
+        if (cell.rowSpan <= 1) return null
+        cell.rowSpan -= 1
+        if (cell.row === targetRow && targetRow < table.rows - 1) cell.row = targetRow
+        return cell
+      }
+
+      if (cell.row > targetRow) cell.row -= 1
+
+      return cell
+    })
+    .filter(Boolean)
+
+  table.rows -= 1
+  table.rowHeights.splice(targetRow, 1)
+  table.height = Math.max(table.rows * 16, table.height - removedHeight)
+  fillMissingTableCells(table)
+  selectedTableCellIds.value = []
+}
+
+function deleteTableColumn(table, colIndex) {
+  if (!table || table.cols <= 1) return
+
+  ensureTableTrackSettings(table)
+
+  const targetCol = clampNumber(colIndex, 0, table.cols - 1)
+  const removedWidth = table.colWidths[targetCol] || table.width / table.cols
+
+  table.cells = table.cells
+    .map(cell => {
+      if (targetCol >= cell.col && targetCol < cell.col + cell.colSpan) {
+        if (cell.colSpan <= 1) return null
+        cell.colSpan -= 1
+        if (cell.col === targetCol && targetCol < table.cols - 1) cell.col = targetCol
+        return cell
+      }
+
+      if (cell.col > targetCol) cell.col -= 1
+
+      return cell
+    })
+    .filter(Boolean)
+
+  table.cols -= 1
+  table.colWidths.splice(targetCol, 1)
+  table.width = Math.max(table.cols * 16, table.width - removedWidth)
+  fillMissingTableCells(table)
+  selectedTableCellIds.value = []
+}
+
+function addTableRowFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  if (!table || !cell || table.rows >= MAX_TABLE_ROWS) return
+
+  insertTableRow(table, cell.row + cell.rowSpan)
+  hideContextMenu()
+}
+
+function addTableColumnFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  if (!table || !cell || table.cols >= MAX_TABLE_COLS) return
+
+  insertTableColumn(table, cell.col + cell.colSpan)
+  hideContextMenu()
+}
+
+function deleteTableRowFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  if (!table || !cell) return
+
+  deleteTableRow(table, cell.row)
+  hideContextMenu()
+}
+
+function deleteTableColumnFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  if (!table || !cell) return
+
+  deleteTableColumn(table, cell.col)
+  hideContextMenu()
+}
+
+function splitTableCellVertically(table, cell) {
+  if (!table || !cell) return
+
+  ensureTableTrackSettings(table)
+
+  const style = cloneTableCellStyle(cell)
+
+  if (cell.colSpan <= 1) {
+    if (table.cols >= MAX_TABLE_COLS) return
+
+    const splitCol = cell.col
+    const originalWidth = table.colWidths[splitCol] || DEFAULT_TABLE_CELL_WIDTH
+    const leftWidth = Math.max(1, originalWidth / 2)
+    const rightWidth = Math.max(1, originalWidth - leftWidth)
+    const targetCellId = String(cell.id)
+    const newCell = createTableCell(table.id, cell.row, cell.col + 1, {
+      rowSpan: cell.rowSpan,
+      ...style
+    })
+
+    table.colWidths[splitCol] = leftWidth
+    table.colWidths.splice(splitCol + 1, 0, rightWidth)
+    table.cols += 1
+
+    table.cells.forEach(otherCell => {
+      if (String(otherCell.id) === targetCellId) return
+
+      if (otherCell.col > splitCol) {
+        otherCell.col += 1
+      } else if (otherCell.col <= splitCol && otherCell.col + otherCell.colSpan > splitCol) {
+        otherCell.colSpan += 1
+      }
+    })
+
+    table.cells.push(newCell)
+    selectedTableCellIds.value = [cell.id, newCell.id]
+    fillMissingTableCells(table)
+    return
+  }
+
+  const originalSpan = cell.colSpan
+  const leftSpan = Math.floor(originalSpan / 2)
+  const rightSpan = originalSpan - leftSpan
+  const newCell = createTableCell(table.id, cell.row, cell.col + leftSpan, {
+    rowSpan: cell.rowSpan,
+    colSpan: rightSpan,
+    ...style
+  })
+
+  cell.colSpan = leftSpan
+  table.cells.push(newCell)
+  selectedTableCellIds.value = [cell.id, newCell.id]
+
+  fillMissingTableCells(table)
+}
+
+function splitTableCellHorizontally(table, cell) {
+  if (!table || !cell) return
+
+  ensureTableTrackSettings(table)
+
+  const style = cloneTableCellStyle(cell)
+
+  if (cell.rowSpan <= 1) {
+    if (table.rows >= MAX_TABLE_ROWS) return
+
+    const splitRow = cell.row
+    const originalHeight = table.rowHeights[splitRow] || DEFAULT_TABLE_CELL_HEIGHT
+    const topHeight = Math.max(1, originalHeight / 2)
+    const bottomHeight = Math.max(1, originalHeight - topHeight)
+    const targetCellId = String(cell.id)
+    const newCell = createTableCell(table.id, cell.row + 1, cell.col, {
+      colSpan: cell.colSpan,
+      ...style
+    })
+
+    table.rowHeights[splitRow] = topHeight
+    table.rowHeights.splice(splitRow + 1, 0, bottomHeight)
+    table.rows += 1
+
+    table.cells.forEach(otherCell => {
+      if (String(otherCell.id) === targetCellId) return
+
+      if (otherCell.row > splitRow) {
+        otherCell.row += 1
+      } else if (otherCell.row <= splitRow && otherCell.row + otherCell.rowSpan > splitRow) {
+        otherCell.rowSpan += 1
+      }
+    })
+
+    table.cells.push(newCell)
+    selectedTableCellIds.value = [cell.id, newCell.id]
+    fillMissingTableCells(table)
+    return
+  }
+
+  const originalSpan = cell.rowSpan
+  const topSpan = Math.floor(originalSpan / 2)
+  const bottomSpan = originalSpan - topSpan
+  const newCell = createTableCell(table.id, cell.row + topSpan, cell.col, {
+    rowSpan: bottomSpan,
+    colSpan: cell.colSpan,
+    ...style
+  })
+
+  cell.rowSpan = topSpan
+  table.cells.push(newCell)
+  selectedTableCellIds.value = [cell.id, newCell.id]
+
+  fillMissingTableCells(table)
+}
+
+function splitTableCellVerticallyFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  splitTableCellVertically(table, cell)
+  hideContextMenu()
+}
+
+function splitTableCellHorizontallyFromContext() {
+  const { table, cell } = getTableCellContext(contextMenu.value.targetId, contextMenu.value.cellId)
+
+  splitTableCellHorizontally(table, cell)
+  hideContextMenu()
+}
+
+function mergeSelectedTableCells() {
+  const table = selectedTable.value
+  const cells = selectedTableCells.value
+
+  if (!table || cells.length < 2) return false
+
+  const coverage = new Set()
+  const selectedIds = new Set(cells.map(cell => String(cell.id)))
+  const minRow = Math.min(...cells.map(cell => cell.row))
+  const minCol = Math.min(...cells.map(cell => cell.col))
+  const maxRow = Math.max(...cells.map(cell => cell.row + cell.rowSpan - 1))
+  const maxCol = Math.max(...cells.map(cell => cell.col + cell.colSpan - 1))
+
+  cells.forEach(cell => {
+    for (let row = cell.row; row < cell.row + cell.rowSpan; row += 1) {
+      for (let col = cell.col; col < cell.col + cell.colSpan; col += 1) {
+        coverage.add(`${row}:${col}`)
+      }
+    }
+  })
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    for (let col = minCol; col <= maxCol; col += 1) {
+      if (!coverage.has(`${row}:${col}`)) return false
+    }
+  }
+
+  const targetCell = cells.find(cell => cell.row === minRow && cell.col === minCol) || cells[0]
+  const mergedText = cells
+    .map(cell => String(cell.text || '').trim())
+    .filter(Boolean)
+    .join('\n')
+
+  targetCell.row = minRow
+  targetCell.col = minCol
+  targetCell.rowSpan = maxRow - minRow + 1
+  targetCell.colSpan = maxCol - minCol + 1
+  if (mergedText) targetCell.text = mergedText
+
+  table.cells = table.cells.filter(cell => !selectedIds.has(String(cell.id)) || String(cell.id) === String(targetCell.id))
+  selectedTableCellIds.value = [targetCell.id]
+  fillMissingTableCells(table)
+
+  return true
+}
+
+function addTable() {
+  const rows = getTableDimensionValue(tableRowsInput.value, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
+  const cols = getTableDimensionValue(tableColsInput.value, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
+  const id = Date.now()
+
+  elements.value.push(new TableElement({
+    id,
+    rows,
+    cols,
+    width: cols * DEFAULT_TABLE_CELL_WIDTH,
+    height: rows * DEFAULT_TABLE_CELL_HEIGHT,
+    colWidths: Array.from({ length: cols }, () => DEFAULT_TABLE_CELL_WIDTH),
+    rowHeights: Array.from({ length: rows }, () => DEFAULT_TABLE_CELL_HEIGHT),
+    cells: createDefaultTableCells(id, rows, cols)
   }))
 
-  nextTick(() => selectElement(groupId))
+  nextTick(() => selectElement(id))
 }
 
 /* -------------------------
@@ -1650,10 +2395,11 @@ function getBorderDash(borderStyleValue, borderWidthValue) {
   const borderWidth = Math.max(1, Number(borderWidthValue) || defaultShapeSettings.strokeWidth)
   const gapLength = Math.max(3, Math.round(borderWidth * 2))
   const dashLength = Math.max(6, Math.round(borderWidth * 4))
+  const dotLength = Math.max(1, Math.round(borderWidth))
 
   if (borderStyle === 'dashed') return [dashLength, gapLength]
-  if (borderStyle === 'dotted') return [0.001, gapLength]
-  if (borderStyle === 'dashDot') return [dashLength, gapLength, 0.001, gapLength]
+  if (borderStyle === 'dotted') return [dotLength, gapLength]
+  if (borderStyle === 'dashDot') return [dashLength, gapLength, dotLength, gapLength]
 
   return []
 }
@@ -1887,7 +2633,7 @@ function getFallbackElementPixelDimensions(item) {
 
   const rotation = Number(item.rotation) || 0
 
-  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'group'].includes(item.type)) {
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group'].includes(item.type)) {
     return {
       width: Math.max(0, Number(item.width) || 0),
       height: Math.max(0, Number(item.height) || 0),
@@ -1982,7 +2728,7 @@ function canEditElementDimensions(item) {
 function getEditableElementDimensions(item) {
   if (!canEditElementDimensions(item)) return null
 
-  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table') {
     return {
       width: Math.max(1, Number(item.width) || 1),
       height: Math.max(1, Number(item.height) || 1)
@@ -2086,7 +2832,7 @@ function setEditableElementDimension(item, dimension, value) {
   const currentDimensions = getEditableElementDimensions(item)
   const targetValue = getDimensionInputValue(value, currentDimensions?.[dimension])
 
-  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table') {
     item[dimension] = targetValue
   } else if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     item.radius = targetValue / 2
@@ -3081,6 +3827,7 @@ function getLayerItemTitle(item) {
   if (item.type === 'label') return `Label${getLayerTitleSuffix(item.text)}`
   if (item.type === 'chart') return `Graph${getLayerTitleSuffix(item.chartTitle)}`
   if (item.type === 'pieChart') return `Pie Chart${getLayerTitleSuffix(item.chartTitle)}`
+  if (item.type === 'table') return `Table (${item.rows || 0} x ${item.cols || 0})`
   if (item.type === 'group' && item.groupKind === 'table') {
     return `Table (${item.tableRows || 0} x ${item.tableCols || 0})`
   }
@@ -3206,6 +3953,7 @@ function collectCanvasItemIds(items, ids = new Set()) {
     if (!item || typeof item !== 'object') return
     if (item.id !== undefined && item.id !== null) ids.add(String(item.id))
     if (Array.isArray(item.children)) collectCanvasItemIds(item.children, ids)
+    if (Array.isArray(item.cells)) collectCanvasItemIds(item.cells, ids)
   })
 
   return ids
@@ -3231,6 +3979,12 @@ function assignClonedCanvasItemIds(item, usedIds) {
 
   if (Array.isArray(item.children)) {
     item.children.forEach(child => assignClonedCanvasItemIds(child, usedIds))
+  }
+
+  if (Array.isArray(item.cells)) {
+    item.cells.forEach(cell => {
+      cell.id = createUniqueCanvasItemId(usedIds)
+    })
   }
 }
 
@@ -3366,6 +4120,7 @@ function hideContextMenu() {
     ...contextMenu.value,
     visible: false,
     targetId: null,
+    cellId: null,
     pastePoint: null
   }
 }
@@ -3429,6 +4184,8 @@ function handleStagePointerMove(event) {
 }
 
 function getContextMenuSize(type = 'canvas') {
+  if (type === 'table-cell') return { width: 172, height: 208 }
+
   return type === 'element'
     ? { width: 126, height: 76 }
     : { width: 92, height: 42 }
@@ -3700,6 +4457,7 @@ function ensureSelectableItemSettings(item) {
   ensureTextSettings(item)
   ensureChartSettings(item)
   ensurePieChartSettings(item)
+  ensureTableSettings(item)
   ensureLabelSettings(item)
   ensureElementBorderSettings(item)
   ensureShapeSettings(item)
@@ -3726,6 +4484,16 @@ function selectElements(ids) {
 
   selectedIds.value = nextIds
   selectedId.value = nextIds.length === 1 ? nextIds[0] : null
+
+  const nextSelectedItem = selectedId.value !== null ? getCanvasItemById(selectedId.value) : null
+
+  if (nextSelectedItem?.type !== 'table') {
+    selectedTableCellIds.value = []
+  }
+
+  if (editingTableCell.value && String(editingTableCell.value.tableId) !== String(nextSelectedItem?.id)) {
+    finishTableCellEditing()
+  }
 
   nextIds.forEach(id => {
     const item = elements.value.find(i => i.id === id)
@@ -3845,6 +4613,10 @@ function handleSelectablePointerDown(event, id) {
     finishTextEditing()
   }
 
+  if (editingTableCell.value && editingTableCell.value.tableId !== id) {
+    finishTableCellEditing()
+  }
+
   if (isMultiSelectEvent(event)) {
     toggleElementSelection(id)
     return
@@ -3857,9 +4629,108 @@ function stopSelectableClick(event) {
   event.cancelBubble = true
 }
 
+function handleTableCellPointerDown(event, tableId, cellId) {
+  const isToggleSelection = isMultiSelectEvent(event)
+  const isRepeatedClick = (Number(event?.evt?.detail) || 0) > 1
+
+  if (isToggleSelection || isRepeatedClick) {
+    event.cancelBubble = true
+    event.evt?.stopPropagation?.()
+  }
+
+  if (editingId.value) finishTextEditing()
+
+  if (
+    editingTableCell.value &&
+    (
+      String(editingTableCell.value.tableId) !== String(tableId) ||
+      String(editingTableCell.value.cellId) !== String(cellId)
+    )
+  ) {
+    finishTableCellEditing()
+  }
+
+  selectTableCell(tableId, cellId, { toggle: isToggleSelection })
+}
+
+function startTableCellEditing(event, tableId, cellId) {
+  event.cancelBubble = true
+  event.evt?.preventDefault?.()
+  event.evt?.stopPropagation?.()
+
+  selectTableCell(tableId, cellId)
+
+  const { cell } = getTableCellContext(tableId, cellId)
+
+  if (!cell) return
+
+  editingTableCell.value = { tableId, cellId }
+  tableCellEditorValue.value = String(cell.text || '')
+
+  nextTick(() => {
+    const editorElement = document.querySelector('.table-cell-editor')
+
+    editorElement?.focus?.()
+    editorElement?.select?.()
+  })
+}
+
+function syncTableCellEditorValue() {
+  if (!editingTableCell.value) return
+
+  const { cell } = getTableCellContext(editingTableCell.value.tableId, editingTableCell.value.cellId)
+
+  if (!cell) return
+
+  cell.text = tableCellEditorValue.value
+}
+
+function finishTableCellEditing() {
+  syncTableCellEditorValue()
+  editingTableCell.value = null
+  tableCellEditorValue.value = ''
+}
+
+function handleTableCellEditorInput(value) {
+  tableCellEditorValue.value = value
+  syncTableCellEditorValue()
+}
+
+function handleTableCellEditorKeydown(event) {
+  if (event.key === 'Escape' || (event.key === 'Enter' && (event.ctrlKey || event.metaKey))) {
+    event.preventDefault()
+    finishTableCellEditing()
+  }
+}
+
+function handleTableCellContextMenu(event, tableId, cellId) {
+  const nativeEvent = event?.evt
+
+  nativeEvent?.preventDefault?.()
+  nativeEvent?.stopPropagation?.()
+
+  event.cancelBubble = true
+  selectTableCell(tableId, cellId)
+
+  const point = getStagePointerPosition(event)
+  const position = getContextMenuPosition(point.x + 8, point.y + 8, 'table-cell')
+
+  contextMenu.value = {
+    visible: true,
+    type: 'table-cell',
+    positionMode: 'stage',
+    targetId: tableId,
+    cellId,
+    x: position.x,
+    y: position.y,
+    pastePoint: null
+  }
+}
+
 function clearSelection() {
   selectedId.value = null
   selectedIds.value = []
+  selectedTableCellIds.value = []
 
   const tr = transformerRef.value?.getNode()
   if (!tr) return
@@ -4191,6 +5062,12 @@ function syncActiveTextEditForLayoutExport() {
   syncEditorContent()
 }
 
+function syncActiveTableCellEditForLayoutExport() {
+  if (!editingTableCell.value) return
+
+  syncTableCellEditorValue()
+}
+
 function startTextEditing(item) {
   const node = nodeRefs.value[item.id]
   if (!node || !editor.value) return
@@ -4266,6 +5143,10 @@ function handleStagePointerDown(event) {
 
   if (editingId.value && !isEditingTarget) {
     finishTextEditing()
+  }
+
+  if (editingTableCell.value) {
+    finishTableCellEditing()
   }
 
   if (isSelectableCanvasTarget(target) || isTransformerTarget(target)) return
@@ -4519,7 +5400,7 @@ function updateTransform(e, id) {
     return
   }
 
-  if (el.type === 'image' || el.type === 'rect' || el.type === 'rightTriangle' || el.type === 'chart' || el.type === 'pieChart') {
+  if (el.type === 'image' || el.type === 'rect' || el.type === 'rightTriangle' || el.type === 'chart' || el.type === 'pieChart' || el.type === 'table') {
     el.width = Math.max(10, node.width() * Math.abs(node.scaleX()))
     el.height = Math.max(10, node.height() * Math.abs(node.scaleY()))
     node.width(el.width)
@@ -4911,6 +5792,8 @@ async function getCurrentLayoutPdfBlob() {
       syncActiveTextEditForLayoutExport()
     }
 
+    syncActiveTableCellEditForLayoutExport()
+
     await nextTick()
 
     restoreExportState = await prepareLayoutForPdfExport()
@@ -5041,6 +5924,7 @@ async function serializeLayoutElement(item, options = {}) {
 
 async function createLayoutExportData(options = {}) {
   syncActiveTextEditForLayoutExport()
+  syncActiveTableCellEditForLayoutExport()
 
   return {
     version: 1,
@@ -5168,6 +6052,65 @@ function getImportElementConfig(item) {
   return config
 }
 
+function getLegacyTableCellText(children, row, col, cellWidth, cellHeight) {
+  const textItem = children.find(child => (
+    child?.type === 'text' &&
+    Math.floor((Number(child.x) || 0) / cellWidth) === col &&
+    Math.floor((Number(child.y) || 0) / cellHeight) === row
+  ))
+
+  return textItem?.text || ''
+}
+
+function getLegacyTableCellRect(children, row, col, cellWidth, cellHeight) {
+  return children.find(child => (
+    child?.type === 'rect' &&
+    Math.round((Number(child.x) || 0) / cellWidth) === col &&
+    Math.round((Number(child.y) || 0) / cellHeight) === row
+  )) || null
+}
+
+function getMigratedLegacyTableConfig(config) {
+  const rows = getTableDimensionValue(config.tableRows, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
+  const cols = getTableDimensionValue(config.tableCols, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
+  const width = Math.max(cols * 16, Number(config.width) || cols * DEFAULT_TABLE_CELL_WIDTH)
+  const height = Math.max(rows * 16, Number(config.height) || rows * DEFAULT_TABLE_CELL_HEIGHT)
+  const cellWidth = width / cols
+  const cellHeight = height / rows
+  const children = Array.isArray(config.children) ? config.children : []
+  const cells = []
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const rect = getLegacyTableCellRect(children, row, col, cellWidth, cellHeight)
+
+      cells.push(createTableCell(config.id, row, col, {
+        text: getLegacyTableCellText(children, row, col, cellWidth, cellHeight),
+        fill: rect?.fill || defaultTableCellSettings.fill,
+        borderColor: rect?.stroke || defaultTableCellSettings.borderColor,
+        borderWidth: rect?.strokeWidth ?? defaultTableCellSettings.borderWidth,
+        borderStyle: getShapeBorderStyleFromDash(rect?.dash)
+      }))
+    }
+  }
+
+  return {
+    id: config.id,
+    type: 'table',
+    x: config.x,
+    y: config.y,
+    width,
+    height,
+    rotation: config.rotation || 0,
+    rows,
+    cols,
+    colWidths: Array.from({ length: cols }, () => cellWidth),
+    rowHeights: Array.from({ length: rows }, () => cellHeight),
+    draggable: config.draggable !== false,
+    cells
+  }
+}
+
 function createImportedElementFromConfig(config) {
   switch (config.type) {
     case 'text':
@@ -5193,7 +6136,13 @@ function createImportedElementFromConfig(config) {
       return new ChartElement(config)
     case 'pieChart':
       return new PieChartElement(config)
+    case 'table':
+      return new TableElement(config)
     case 'group':
+      if (config.groupKind === 'table') {
+        return new TableElement(getMigratedLegacyTableConfig(config))
+      }
+
       return new GroupElement(config)
     default:
       return null
@@ -5434,6 +6383,11 @@ onBeforeUnmount(() => {
     editingTextTarget,
     activeSidebarElementTab,
     sidebarElementTabs,
+    tableRowsInput,
+    tableColsInput,
+    selectedTableCellIds,
+    editingTableCell,
+    tableCellEditorValue,
     draggedLayerId,
     dragOverLayerId,
     isImageDragActive,
@@ -5453,6 +6407,13 @@ onBeforeUnmount(() => {
     canvasVersion,
     defaultImageSettings,
     defaultTextSettings,
+    defaultTableCellSettings,
+    MIN_TABLE_ROWS,
+    MAX_TABLE_ROWS,
+    MIN_TABLE_COLS,
+    MAX_TABLE_COLS,
+    DEFAULT_TABLE_CELL_WIDTH,
+    DEFAULT_TABLE_CELL_HEIGHT,
     shapeTypes,
     regularPolygonShapeTypes,
     borderableElementTypes,
@@ -5502,12 +6463,15 @@ onBeforeUnmount(() => {
     canGroupSelected,
     selectedText,
     selectedGroup,
+    selectedTable,
+    selectedTableCells,
     selectedLabel,
     selectedImage,
     selectedChart,
     selectedPieChart,
     selectedShape,
     editingItem,
+    tableCellEditorStyle,
     transformerConfig,
     richEditorStyle,
     BARCODE_MAX_LENGTH,
@@ -5547,6 +6511,48 @@ onBeforeUnmount(() => {
     addPolygon,
     addChart,
     addPieChart,
+    getTableDimensionValue,
+    setTableRowsInput,
+    setTableColsInput,
+    createTableCellId,
+    getTableCellCoordinates,
+    createTableCell,
+    createDefaultTableCells,
+    ensureTableCellSettings,
+    normalizeTableCells,
+    ensureTableSettings,
+    getVisibleTableCells,
+    getTableCellById,
+    getTableCellLayout,
+    getTableConfig,
+    getTableCellGroupConfig,
+    getTableCellRectConfig,
+    getTableCellTextConfig,
+    getTableCellSelectionConfig,
+    getTableBorderEdgeKey,
+    getTableCellBorderEdges,
+    getTableBorderLineConfigs,
+    getTableCellEditorStyle,
+    isTableCellSelected,
+    selectTableCell,
+    getTableCellContext,
+    getSelectedTableCellStyleValue,
+    setSelectedTableCellsStyle,
+    cloneTableCellStyle,
+    fillMissingTableCells,
+    insertTableRow,
+    insertTableColumn,
+    deleteTableRow,
+    deleteTableColumn,
+    addTableRowFromContext,
+    addTableColumnFromContext,
+    deleteTableRowFromContext,
+    deleteTableColumnFromContext,
+    splitTableCellVertically,
+    splitTableCellHorizontally,
+    splitTableCellVerticallyFromContext,
+    splitTableCellHorizontallyFromContext,
+    mergeSelectedTableCells,
     addTable,
     setRef,
     clampNumber,
@@ -5780,6 +6786,13 @@ onBeforeUnmount(() => {
     isMultiSelectEvent,
     handleSelectablePointerDown,
     stopSelectableClick,
+    handleTableCellPointerDown,
+    startTableCellEditing,
+    syncTableCellEditorValue,
+    finishTableCellEditing,
+    handleTableCellEditorInput,
+    handleTableCellEditorKeydown,
+    handleTableCellContextMenu,
     clearSelection,
     groupSelectedElements,
     ungroupSelectedGroup,
@@ -5803,6 +6816,7 @@ onBeforeUnmount(() => {
     transformRichTextHtmlText,
     toggleTextCase,
     syncActiveTextEditForLayoutExport,
+    syncActiveTableCellEditForLayoutExport,
     startTextEditing,
     startShapeTextEditing,
     handleStagePointerDown,

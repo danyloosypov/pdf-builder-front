@@ -53,6 +53,13 @@ defineProps({
   getPieChartTitleConfig: { type: Function, required: true },
   getPieChartSliceConfigs: { type: Function, required: true },
   getPieChartLabelConfigs: { type: Function, required: true },
+  getVisibleTableCells: { type: Function, required: true },
+  getTableConfig: { type: Function, required: true },
+  getTableCellGroupConfig: { type: Function, required: true },
+  getTableCellRectConfig: { type: Function, required: true },
+  getTableCellTextConfig: { type: Function, required: true },
+  getTableCellSelectionConfig: { type: Function, required: true },
+  getTableBorderLineConfigs: { type: Function, required: true },
   getShapeTextImageConfig: { type: Function, required: true }
 })
 
@@ -62,6 +69,9 @@ const emit = defineEmits([
   'selectable-context-menu',
   'text-edit',
   'shape-text-edit',
+  'table-cell-pointer-down',
+  'table-cell-edit',
+  'table-cell-context-menu',
   'position-update',
   'position-drag',
   'transform-update'
@@ -383,6 +393,37 @@ const emit = defineEmits([
         v-for="label in getPieChartLabelConfigs(item)"
         :key="label.id"
         :config="label"
+    />
+  </v-group>
+
+  <v-group
+      v-else-if="item.type === 'table'"
+      :ref="el => setRef(el, item.id)"
+      :config="getTableConfig(item)"
+      @mousedown="emit('selectable-pointer-down', $event, item.id)"
+      @touchstart="emit('selectable-pointer-down', $event, item.id)"
+      @contextmenu="emit('selectable-context-menu', $event, item.id)"
+      @click="emit('selectable-click', $event)"
+      @dragend="emit('position-update', $event, item.id)"
+      @transformend="emit('transform-update', $event, item.id)"
+  >
+    <v-group
+        v-for="cell in getVisibleTableCells(item)"
+        :key="cell.id"
+        :config="getTableCellGroupConfig(item, cell)"
+        @mousedown="emit('table-cell-pointer-down', $event, item.id, cell.id)"
+        @touchstart="emit('table-cell-pointer-down', $event, item.id, cell.id)"
+        @dblclick="emit('table-cell-edit', $event, item.id, cell.id)"
+        @contextmenu="emit('table-cell-context-menu', $event, item.id, cell.id)"
+    >
+      <v-rect :config="getTableCellRectConfig(item, cell)" />
+      <v-text :config="getTableCellTextConfig(item, cell)" />
+      <v-rect :config="getTableCellSelectionConfig(item, cell)" />
+    </v-group>
+    <v-line
+        v-for="line in getTableBorderLineConfigs(item)"
+        :key="line.id"
+        :config="line"
     />
   </v-group>
 
