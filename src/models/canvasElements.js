@@ -26,6 +26,7 @@ export class TextElement extends CanvasElement {
       borderStyle: 'solid',
       wrap: 'word',
       draggable: true,
+      templateVariable: '',
       ...config
     })
   }
@@ -51,6 +52,7 @@ export class ImageElement extends CanvasElement {
       cropTop: 0,
       cropBottom: 0,
       draggable: true,
+      templateVariable: '',
       ...config
     })
   }
@@ -186,6 +188,7 @@ export class LabelElement extends CanvasElement {
       borderColor: '#111827',
       borderWidth: 0,
       borderStyle: 'solid',
+      templateVariable: '',
       tag: {
         fill: '#3498db',
         cornerRadius: 4

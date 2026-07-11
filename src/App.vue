@@ -406,6 +406,27 @@ export default {
       >
         Save Image URL Layout
       </button>
+      <button
+          class="export-layout-button"
+          type="button"
+          @click="exportTemplateAsJson"
+      >
+        Save Template
+      </button>
+      <label
+          class="file-upload-button import-layout-button"
+          :class="{ 'is-disabled': isApplyingTemplateValues }"
+      >
+        {{ isApplyingTemplateValues ? 'Filling...' : 'Fill Template JSON' }}
+        <input
+            type="file"
+            accept="application/json,.json"
+            :disabled="isApplyingTemplateValues"
+            @change="importTemplateValuesFile"
+        >
+      </label>
+      <p v-if="templateValuesImportError" class="field-error">{{ templateValuesImportError }}</p>
+      <p v-if="templateValuesImportMessage" class="field-success">{{ templateValuesImportMessage }}</p>
       <label
           class="file-upload-button import-layout-button"
           :class="{ 'is-disabled': isImportingLayout }"
@@ -591,6 +612,28 @@ export default {
         </div>
 
         <div v-if="selectedTableCells.length" class="table-cell-settings">
+          <label class="control-row">
+            <span>Repeat Row</span>
+            <input
+                :value="getSelectedTableRowRepeatVariable()"
+                class="chart-text-input"
+                type="text"
+                placeholder="items"
+                @input="setSelectedTableRowRepeatVariable($event.target.value)"
+            >
+          </label>
+
+          <label class="control-row">
+            <span>Variable</span>
+            <input
+                :value="getSelectedTableCellStyleValue('templateVariable', '')"
+                class="chart-text-input"
+                type="text"
+                placeholder="name"
+                @input="setSelectedTableCellsStyle({ templateVariable: $event.target.value.trim() })"
+            >
+          </label>
+
           <div class="chart-color-grid">
             <label>
               <span>Cell</span>
@@ -727,6 +770,16 @@ export default {
         <div class="panel-title">Text Settings</div>
 
         <label class="control-row">
+          <span>Variable</span>
+          <input
+              v-model.trim="selectedText.templateVariable"
+              class="chart-text-input"
+              type="text"
+              placeholder="customer_name"
+          >
+        </label>
+
+        <label class="control-row">
           <span>Font Size</span>
           <input
               :value="selectedText.fontSize || 20"
@@ -822,6 +875,16 @@ export default {
 
       <div v-if="selectedLabel" class="image-editor-panel">
         <div class="panel-title">Label Settings</div>
+
+        <label class="control-row">
+          <span>Variable</span>
+          <input
+              v-model.trim="selectedLabel.templateVariable"
+              class="chart-text-input"
+              type="text"
+              placeholder="status_label"
+          >
+        </label>
 
         <label class="control-row">
           <span>Text</span>
@@ -982,6 +1045,16 @@ export default {
 
       <div v-if="selectedImage" class="image-editor-panel">
         <div class="panel-title">Image Settings</div>
+
+        <label class="control-row">
+          <span>Variable</span>
+          <input
+              v-model.trim="selectedImage.templateVariable"
+              class="chart-text-input"
+              type="text"
+              placeholder="logo_image"
+          >
+        </label>
 
         <div class="control-row">
           <span>Radius</span>

@@ -107,6 +107,13 @@ import {
   getShapeStrokeWidthMin,
   setCornerRadiusValue
 } from '../utils/elementStyles'
+import {
+  applyTemplateVariables,
+  applyTemplateVariablesToElements,
+  canElementHaveTemplateVariable,
+  getTemplateVariablesFromElements,
+  normalizeTemplateValuesPayload
+} from '../utils/templateVariables'
 import { getNormalizedQRLink } from '../utils/qr'
 
 export function usePdfBuilder() {
@@ -314,6 +321,9 @@ const barcodeError = ref('')
 const isImportingLayout = ref(false)
 const layoutImportError = ref('')
 const layoutImportMessage = ref('')
+const isApplyingTemplateValues = ref(false)
+const templateValuesImportError = ref('')
+const templateValuesImportMessage = ref('')
 const copiedCanvasItems = ref([])
 const contextMenu = ref({
   visible: false,
@@ -971,6 +981,8 @@ function createTableCell(tableId, row, col, overrides = {}) {
     rowSpan: 1,
     colSpan: 1,
     text: '',
+    templateVariable: '',
+    repeatVariable: '',
     ...defaultTableCellSettings,
     ...overrides
   }
@@ -998,6 +1010,11 @@ function ensureTableCellSettings(cell, tableId) {
     rowSpan: coordinates.rowSpan,
     colSpan: coordinates.colSpan,
     text: cell.text ?? '',
+    templateVariable: String(cell.templateVariable || '').trim(),
+    repeatVariable: String(cell.repeatVariable || '').trim(),
+    repeatGeneratedFrom: String(cell.repeatGeneratedFrom || '').trim(),
+    repeatSourceCellId: cell.repeatSourceCellId,
+    repeatSourceRow: cell.repeatSourceRow,
     fill: getHexColor(cell.fill, defaultTableCellSettings.fill),
     textColor: getHexColor(cell.textColor, defaultTableCellSettings.textColor),
     fontSize: Math.max(6, Math.round(Number(cell.fontSize) || defaultTableCellSettings.fontSize)),
@@ -1311,6 +1328,42 @@ function getSelectedTableCellStyleValue(property, fallback) {
   return source?.[property] ?? fallback
 }
 
+function getSelectedTableCellRows() {
+  return Array.from(new Set(
+    selectedTableCells.value
+      .map(cell => Number(cell.row))
+      .filter(Number.isFinite)
+  ))
+}
+
+function getSelectedTableRowRepeatVariable() {
+  const table = selectedTable.value
+  const rows = getSelectedTableCellRows()
+
+  if (!table || !rows.length) return ''
+
+  const rowCells = getVisibleTableCells(table)
+    .filter(cell => rows.includes(cell.row))
+  const source = rowCells.find(cell => String(cell.repeatVariable || '').trim())
+
+  return String(source?.repeatVariable || '').trim()
+}
+
+function setSelectedTableRowRepeatVariable(value) {
+  const table = selectedTable.value
+  const rows = getSelectedTableCellRows()
+
+  if (!table || !rows.length) return
+
+  const repeatVariable = String(value || '').trim()
+
+  getVisibleTableCells(table).forEach(cell => {
+    if (!rows.includes(cell.row)) return
+
+    cell.repeatVariable = repeatVariable
+  })
+}
+
 function setSelectedTableCellsStyle(attrs) {
   const cells = selectedTableCells.value
 
@@ -1345,7 +1398,8 @@ function cloneTableCellStyle(cell) {
     verticalAlign: cell.verticalAlign,
     borderColor: cell.borderColor,
     borderWidth: cell.borderWidth,
-    borderStyle: cell.borderStyle
+    borderStyle: cell.borderStyle,
+    repeatVariable: cell.repeatVariable
   }
 }
 
@@ -4049,7 +4103,15 @@ function handleGlobalClipboardKeyDown(event) {
   event.stopPropagation()
 }
 
+function ensureTemplateVariableSettings(item) {
+  if (!canElementHaveTemplateVariable(item)) return
+  if (item.templateVariable === undefined) item.templateVariable = ''
+
+  item.templateVariable = String(item.templateVariable || '').trim()
+}
+
 function ensureSelectableItemSettings(item) {
+  ensureTemplateVariableSettings(item)
   ensureImageSettings(item)
   ensureTextSettings(item)
   ensureChartSettings(item)
@@ -5523,8 +5585,13 @@ async function createLayoutExportData(options = {}) {
   syncActiveTextEditForLayoutExport()
   syncActiveTableCellEditForLayoutExport()
 
+  const serializedElements = await Promise.all(
+    elements.value.map(item => serializeLayoutElement(item, options))
+  )
+
   return {
     version: 1,
+    documentType: options.documentType || 'layout',
     imageMode: options.imageMode || 'url',
     exportedAt: new Date().toISOString(),
     page: {
@@ -5539,9 +5606,8 @@ async function createLayoutExportData(options = {}) {
       marginsInches: { ...pageMarginsInches.value },
       customMarginsInches: { ...customPageMarginsInches.value }
     },
-    elements: await Promise.all(
-      elements.value.map(item => serializeLayoutElement(item, options))
-    )
+    variables: getTemplateVariablesFromElements(serializedElements),
+    elements: serializedElements
   }
 }
 
@@ -5587,9 +5653,98 @@ async function exportLayoutWithImageUrlsAsJson() {
   downloadJsonFile(data, getLayoutExportFileName('image-urls'))
 }
 
+async function exportTemplateAsJson() {
+  const data = await createLayoutExportData({
+    documentType: 'template',
+    imageMode: 'url'
+  })
+
+  downloadJsonFile(data, getLayoutExportFileName('template'))
+}
+
 function isJsonLayoutFile(file) {
   return file?.type === 'application/json' ||
     /\.json$/i.test(file?.name || '')
+}
+
+function isTemplateValuesFile(file) {
+  return isJsonLayoutFile(file)
+}
+
+async function loadTemplateValueImages(imageElements, stats) {
+  await Promise.all(imageElements.map(async item => {
+    const imageSource = getImportedImageSource(item)
+
+    item.image = await loadImportedImage(imageSource, stats)
+  }))
+}
+
+async function applyTemplateValuesData(data) {
+  const values = normalizeTemplateValuesPayload(data)
+
+  if (!values) {
+    throw new Error('Choose a JSON object with variable values.')
+  }
+
+  if (editingId.value) finishTextEditing()
+  if (editingTableCell.value) finishTableCellEditing()
+
+  const result = applyTemplateVariablesToElements(elements.value, values)
+  const stats = { failedImages: 0 }
+
+  if (result.imageElements.length) {
+    await loadTemplateValueImages(result.imageElements, stats)
+  }
+
+  await nextTick()
+  elements.value.forEach(renderImportedRichTextImages)
+  updateTransformerSelection()
+
+  return {
+    valueCount: Object.keys(values).length,
+    matched: result.matched,
+    changed: result.changed,
+    failedImages: stats.failedImages
+  }
+}
+
+async function importTemplateValuesFile(event) {
+  const input = event.target
+  const file = input.files?.[0]
+
+  templateValuesImportError.value = ''
+  templateValuesImportMessage.value = ''
+
+  if (!file) return
+
+  if (!isTemplateValuesFile(file)) {
+    templateValuesImportError.value = 'Choose a JSON values file.'
+    input.value = ''
+    return
+  }
+
+  isApplyingTemplateValues.value = true
+
+  try {
+    const data = JSON.parse(await file.text())
+    const result = await applyTemplateValuesData(data)
+
+    if (!result.matched) {
+      templateValuesImportMessage.value = `Loaded ${result.valueCount} value${result.valueCount === 1 ? '' : 's'}, but none matched current template variables.`
+      return
+    }
+
+    const imageWarning = result.failedImages
+      ? ` ${result.failedImages} image${result.failedImages === 1 ? '' : 's'} could not be loaded.`
+      : ''
+
+    templateValuesImportMessage.value = `Filled ${result.changed} element${result.changed === 1 ? '' : 's'} from ${result.valueCount} value${result.valueCount === 1 ? '' : 's'}.${imageWarning}`
+  } catch (error) {
+    templateValuesImportError.value = error?.message || 'Could not apply this values file.'
+  } finally {
+    isApplyingTemplateValues.value = false
+    input.value = ''
+  }
 }
 
 function getImportLayoutElements(data) {
@@ -5996,6 +6151,9 @@ onBeforeUnmount(() => {
     isImportingLayout,
     layoutImportError,
     layoutImportMessage,
+    isApplyingTemplateValues,
+    templateValuesImportError,
+    templateValuesImportMessage,
     isPdfExporting,
     pdfExportError,
     copiedCanvasItems,
@@ -6141,6 +6299,9 @@ onBeforeUnmount(() => {
     selectTableCell,
     getTableCellContext,
     getSelectedTableCellStyleValue,
+    getSelectedTableCellRows,
+    getSelectedTableRowRepeatVariable,
+    setSelectedTableRowRepeatVariable,
     setSelectedTableCellsStyle,
     cloneTableCellStyle,
     fillMissingTableCells,
@@ -6379,6 +6540,12 @@ onBeforeUnmount(() => {
     handleGlobalPaste,
     isEditableKeyboardTarget,
     handleGlobalClipboardKeyDown,
+    canElementHaveTemplateVariable,
+    getTemplateVariablesFromElements,
+    applyTemplateVariables,
+    applyTemplateVariablesToElements,
+    normalizeTemplateValuesPayload,
+    ensureTemplateVariableSettings,
     ensureSelectableItemSettings,
     updateTransformerSelection,
     selectElements,
@@ -6467,7 +6634,12 @@ onBeforeUnmount(() => {
     exportLayoutAsJson,
     exportLayoutWithImagesAsJson,
     exportLayoutWithImageUrlsAsJson,
+    exportTemplateAsJson,
     isJsonLayoutFile,
+    isTemplateValuesFile,
+    loadTemplateValueImages,
+    applyTemplateValuesData,
+    importTemplateValuesFile,
     getImportLayoutElements,
     getImportedImageSource,
     loadImageFromSource,
