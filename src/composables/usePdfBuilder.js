@@ -1,10 +1,51 @@
 ﻿import { ref, computed, nextTick, watch } from 'vue'
-import { Extension, Mark } from '@tiptap/core'
 import { onMounted, onBeforeUnmount } from 'vue'
 import { useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import QRCode from 'qrcode'
+import {
+  CLIPBOARD_PASTE_OFFSET,
+  CM_PER_INCH,
+  DEFAULT_TABLE_CELL_HEIGHT,
+  DEFAULT_TABLE_CELL_WIDTH,
+  MAX_PAGE_INCHES,
+  MAX_TABLE_COLS,
+  MAX_TABLE_ROWS,
+  MIN_PAGE_INCHES,
+  MIN_TABLE_COLS,
+  MIN_TABLE_ROWS,
+  PAGE_OFFSET_X,
+  PAGE_OFFSET_Y,
+  PAGE_STAGE_PADDING_X,
+  PAGE_STAGE_PADDING_Y,
+  PX_PER_INCH,
+  SIDEBAR_ELEMENT_DRAG_TYPE,
+  borderStyleOptions,
+  borderableElementTypes,
+  cornerRadiusFields,
+  defaultChartSettings,
+  defaultElementBorderSettings,
+  defaultImageSettings,
+  defaultLineHitStrokeWidth,
+  defaultPieChartColors,
+  defaultPieChartSettings,
+  defaultShapeFills,
+  defaultShapeSettings,
+  defaultTableCellSettings,
+  defaultTextSettings,
+  dimensionEditableTypes,
+  fillableShapeTypes,
+  fontOptions,
+  pageMarginPresets,
+  pageSizePresets,
+  regularPolygonShapeTypes,
+  shapeLabels,
+  shapeTypes,
+  sidebarElementDragTypes,
+  sidebarElementTabs
+} from '../constants/pdfBuilderSettings'
+import { createRichTextStyleExtension, createTextAlignExtension } from '../editor/richTextExtensions'
 import {
   ArrowElement,
   ChartElement,
@@ -20,6 +61,53 @@ import {
   TableElement,
   TextElement
 } from '../models/canvasElements'
+import {
+  BARCODE_BAR_HEIGHT,
+  BARCODE_LABEL_HEIGHT,
+  BARCODE_MAX_LENGTH,
+  BARCODE_MODULE_WIDTH,
+  BARCODE_QUIET_ZONE_MODULES,
+  CODE128_B_PATTERNS,
+  CODE128_START_B,
+  CODE128_STOP,
+  createBarcodeDataURL,
+  drawBarcodeLabel,
+  getBarcodeValidationError,
+  getCode128BSequence,
+  getPatternModuleCount
+} from '../utils/barcode'
+import {
+  clampNumber,
+  getLineLocalBounds,
+  getLineRawBounds,
+  getRotatedPoint
+} from '../utils/canvasGeometry'
+import {
+  canElementHaveBorder,
+  canShapeHaveCornerRadius,
+  canShapeHaveFill,
+  ensureElementBorderSettings,
+  ensureShapeSettings,
+  getBorderDash,
+  getBorderLineConfig,
+  getBorderWidthValue,
+  getCornerRadiusConfig,
+  getCornerRadiusMax,
+  getCornerRadiusValue,
+  getCornerRadiusValues,
+  getElementBorderColor,
+  getElementBorderConfig,
+  getHexColor,
+  getShapeBorderConfig,
+  getShapeBorderDash,
+  getShapeBorderStyle,
+  getShapeBorderStyleFromDash,
+  getShapeCornerRadiusMax,
+  getShapePanelTitle,
+  getShapeStrokeWidthMin,
+  setCornerRadiusValue
+} from '../utils/elementStyles'
+import { getNormalizedQRLink } from '../utils/qr'
 
 export function usePdfBuilder() {
 
@@ -29,28 +117,6 @@ export function usePdfBuilder() {
 
 const elements = ref([])
 
-const PX_PER_INCH = 96
-const CM_PER_INCH = 2.54
-const PAGE_OFFSET_X = 100
-const PAGE_OFFSET_Y = 50
-const PAGE_STAGE_PADDING_X = 200
-const PAGE_STAGE_PADDING_Y = 200
-const MIN_PAGE_INCHES = 1
-const MAX_PAGE_INCHES = 80
-
-const pageSizePresets = [
-  { label: 'A5', value: 'a5', widthCm: 14.8, heightCm: 21 },
-  { label: 'A4', value: 'a4', widthCm: 21, heightCm: 29.7 },
-  { label: 'A3', value: 'a3', widthCm: 29.7, heightCm: 42 },
-  { label: 'Custom', value: 'custom' }
-]
-const pageMarginPresets = [
-  { label: 'Normal', value: 'normal', marginsInches: { top: 1, right: 1, bottom: 1, left: 1 } },
-  { label: 'Narrow', value: 'narrow', marginsInches: { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 } },
-  { label: 'Moderate', value: 'moderate', marginsInches: { top: 1, right: 0.75, bottom: 1, left: 0.75 } },
-  { label: 'Wide', value: 'wide', marginsInches: { top: 1, right: 2, bottom: 1, left: 2 } },
-  { label: 'Custom', value: 'custom' }
-]
 const selectedPagePreset = ref('a4')
 const pageUnit = ref('cm')
 const pageOrientation = ref('portrait')
@@ -232,30 +298,6 @@ const nodeRefs = ref({})
 const editingId = ref(null)
 const editingTextTarget = ref('text')
 const activeSidebarElementTab = ref('text')
-const sidebarElementTabs = [
-  { id: 'text', label: 'Текстовые элементы' },
-  { id: 'shapes', label: 'Фигуры' },
-  { id: 'charts', label: 'Диаграммы' },
-  { id: 'images', label: 'Изображения' },
-  { id: 'other', label: 'Другое' }
-]
-const SIDEBAR_ELEMENT_DRAG_TYPE = 'application/x-pdf-builder-sidebar-element'
-const sidebarElementDragTypes = new Set([
-  'text',
-  'label',
-  'rect',
-  'triangle',
-  'circle',
-  'rightTriangle',
-  'arrow',
-  'line',
-  'polygon',
-  'chart',
-  'pieChart',
-  'qr',
-  'barcode',
-  'table'
-])
 const tableRowsInput = ref(3)
 const tableColsInput = ref(3)
 const selectedTableCellIds = ref([])
@@ -288,123 +330,6 @@ const richRenderVersions = new Map()
 let canvasVersion = 0
 let generatedCanvasIdCounter = 0
 let clipboardPasteCount = 0
-const defaultImageSettings = {
-  cornerRadius: 0,
-  opacity: 1,
-  objectFit: 'cover',
-  cropLeft: 0,
-  cropRight: 0,
-  cropTop: 0,
-  cropBottom: 0
-}
-const defaultTextSettings = {
-  fontSize: 20,
-  lineHeight: 1.35,
-  letterSpacing: 0
-}
-const defaultTableCellSettings = {
-  fill: '#ffffff',
-  textColor: '#111827',
-  fontSize: 14,
-  textAlign: 'left',
-  verticalAlign: 'middle',
-  borderColor: '#111827',
-  borderWidth: 1,
-  borderStyle: 'solid'
-}
-const MIN_TABLE_ROWS = 1
-const MAX_TABLE_ROWS = 30
-const MIN_TABLE_COLS = 1
-const MAX_TABLE_COLS = 20
-const DEFAULT_TABLE_CELL_WIDTH = 100
-const DEFAULT_TABLE_CELL_HEIGHT = 40
-const CLIPBOARD_PASTE_OFFSET = 24
-const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
-const regularPolygonShapeTypes = ['polygon', 'triangle']
-const borderableElementTypes = ['text', 'image', 'label', 'chart']
-const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow', 'table']
-const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle']
-const cornerRadiusFields = [
-  { label: 'Top left', index: 0 },
-  { label: 'Top right', index: 1 },
-  { label: 'Bottom right', index: 2 },
-  { label: 'Bottom left', index: 3 }
-]
-const shapeLabels = {
-  rect: 'Rectangle',
-  circle: 'Circle',
-  polygon: 'Polygon',
-  triangle: 'Triangle',
-  rightTriangle: 'Right Triangle',
-  line: 'Line',
-  arrow: 'Arrow'
-}
-const defaultShapeSettings = {
-  stroke: '#111827',
-  strokeWidth: 2,
-  borderStyle: 'solid',
-  opacity: 1
-}
-const defaultElementBorderSettings = {
-  borderColor: '#111827',
-  borderWidth: 0,
-  borderStyle: 'solid'
-}
-const borderStyleOptions = [
-  { label: 'Solid', value: 'solid' },
-  { label: 'Dashed', value: 'dashed' },
-  { label: 'Dotted', value: 'dotted' },
-  { label: 'Dash-dot', value: 'dashDot' }
-]
-const borderStyleValues = new Set(borderStyleOptions.map(option => option.value))
-const borderStyleAliases = {
-  dashdot: 'dashDot',
-  'dash-dot': 'dashDot',
-  dash_dot: 'dashDot'
-}
-const defaultLineHitStrokeWidth = 18
-const defaultShapeFills = {
-  rect: '#dddddd',
-  circle: '#87ceeb',
-  polygon: '#f1c40f',
-  triangle: '#f59e0b',
-  rightTriangle: '#60a5fa'
-}
-const defaultChartSettings = {
-  chartType: 'line',
-  chartTitle: 'Graph title',
-  xAxisLabel: 'X axis',
-  yAxisLabel: 'Y axis',
-  chartData: '12, 48, 32, 76, 54, 92, 68',
-  xAxisValues: '0, 1, 2, 3, 4, 5, 6',
-  yAxisValues: '12, 48, 32, 76, 54, 92, 68',
-  stroke: '#2563eb',
-  fill: '#93c5fd',
-  backgroundColor: '#ffffff',
-  fillOpacity: 0.35,
-  strokeWidth: 3,
-  pointRadius: 4,
-  showGrid: true,
-  showPoints: true
-}
-const defaultPieChartColors = [
-  '#2563eb',
-  '#ef4444',
-  '#10b981',
-  '#f59e0b',
-  '#8b5cf6',
-  '#14b8a6',
-  '#f97316',
-  '#64748b'
-]
-const defaultPieChartSettings = {
-  chartTitle: 'Pie chart',
-  pieData: 'Design, 45\nDevelopment, 30\nTesting, 25',
-  showLabels: true,
-  backgroundColor: '#ffffff',
-  labelColor: '#111827',
-  sliceColors: [...defaultPieChartColors]
-}
 const editorPosition = ref({
   x: 0,
   y: 0,
@@ -412,127 +337,11 @@ const editorPosition = ref({
   rotation: 0
 })
 
-const fontOptions = [
-  { label: 'Arial', value: 'Arial, sans-serif' },
-  { label: 'Times', value: 'Times New Roman, serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Courier', value: 'Courier New, monospace' },
-  { label: 'Verdana', value: 'Verdana, sans-serif' },
-  { label: 'Roboto', value: 'Roboto, Arial, sans-serif' }
-]
-
-const RichTextStyle = Mark.create({
-  name: 'richTextStyle',
-
-  addAttributes() {
-    return {
-      color: {
-        default: null,
-        parseHTML: element => getHexColor(element.style.color, null),
-        renderHTML: () => ({})
-      },
-      backgroundColor: {
-        default: null,
-        parseHTML: element => getHexColor(element.style.backgroundColor, null),
-        renderHTML: () => ({})
-      },
-      fontFamily: {
-        default: null,
-        parseHTML: element => element.style.fontFamily || null,
-        renderHTML: () => ({})
-      },
-      fontSize: {
-        default: null,
-        parseHTML: element => getNormalizedTextFontSize(element.style.fontSize),
-        renderHTML: () => ({})
-      },
-      opacity: {
-        default: null,
-        parseHTML: element => element.style.opacity || null,
-        renderHTML: () => ({})
-      }
-    }
-  },
-
-  parseHTML() {
-    return [
-      {
-        tag: 'span',
-        getAttrs: element => {
-          const style = element.getAttribute('style') || ''
-          return style ? null : false
-        }
-      }
-    ]
-  },
-
-  renderHTML({ mark }) {
-    const styles = []
-    const { color, backgroundColor, fontFamily, fontSize, opacity } = mark.attrs
-
-    if (color) styles.push(`color:${color}`)
-    if (backgroundColor) styles.push(`background-color:${backgroundColor}`)
-    if (fontFamily) styles.push(`font-family:${fontFamily}`)
-    if (fontSize) {
-      const normalizedFontSize = getNormalizedTextFontSize(fontSize)
-      if (normalizedFontSize) styles.push(`font-size:${normalizedFontSize}px`)
-    }
-    if (opacity !== null && opacity !== undefined) styles.push(`opacity:${opacity}`)
-
-    return ['span', styles.length ? { style: styles.join(';') } : {}, 0]
-  }
+const RichTextStyle = createRichTextStyleExtension({
+  getHexColor,
+  getNormalizedTextFontSize
 })
-
-const TextAlign = Extension.create({
-  name: 'textAlign',
-
-  addGlobalAttributes() {
-    return [
-      {
-        types: ['paragraph', 'heading'],
-        attributes: {
-          textAlign: {
-            default: null,
-            parseHTML: element => element.style.textAlign || null,
-            renderHTML: attributes => {
-              if (!attributes.textAlign) return {}
-
-              return {
-                style: `text-align:${attributes.textAlign}`
-              }
-            }
-          }
-        }
-      }
-    ]
-  },
-
-  addCommands() {
-    return {
-      setTextAlign:
-        alignment =>
-        ({ state, tr, dispatch }) => {
-          const { from, to } = state.selection
-          let changed = false
-
-          state.doc.nodesBetween(from, to, (node, pos) => {
-            if (!node.isTextblock) return
-            if (!['paragraph', 'heading'].includes(node.type.name)) return
-
-            tr.setNodeMarkup(pos, undefined, {
-              ...node.attrs,
-              textAlign: alignment
-            })
-            changed = true
-          })
-
-          if (changed && dispatch) dispatch(tr)
-
-          return changed
-        }
-    }
-  }
-})
+const TextAlign = createTextAlignExtension()
 
 const editor = useEditor({
   extensions: [
@@ -711,54 +520,6 @@ const richEditorStyle = computed(() => {
    ADD ELEMENTS
 --------------------------*/
 
-const BARCODE_MAX_LENGTH = 80
-const BARCODE_MODULE_WIDTH = 2
-const BARCODE_BAR_HEIGHT = 80
-const BARCODE_LABEL_HEIGHT = 24
-const BARCODE_QUIET_ZONE_MODULES = 10
-const CODE128_START_B = 104
-const CODE128_STOP = 106
-const CODE128_B_PATTERNS = [
-  '212222', '222122', '222221', '121223', '121322', '131222',
-  '122213', '122312', '132212', '221213', '221312', '231212',
-  '112232', '122132', '122231', '113222', '123122', '123221',
-  '223211', '221132', '221231', '213212', '223112', '312131',
-  '311222', '321122', '321221', '312212', '322112', '322211',
-  '212123', '212321', '232121', '111323', '131123', '131321',
-  '112313', '132113', '132311', '211313', '231113', '231311',
-  '112133', '112331', '132131', '113123', '113321', '133121',
-  '313121', '211331', '231131', '213113', '213311', '213131',
-  '311123', '311321', '331121', '312113', '312311', '332111',
-  '314111', '221411', '431111', '111224', '111422', '121124',
-  '121421', '141122', '141221', '112214', '112412', '122114',
-  '122411', '142112', '142211', '241211', '221114', '413111',
-  '241112', '134111', '111242', '121142', '121241', '114212',
-  '124112', '124211', '411212', '421112', '421211', '212141',
-  '214121', '412121', '111143', '111341', '131141', '114113',
-  '114311', '411113', '411311', '113141', '114131', '311141',
-  '411131', '211412', '211214', '211232', '2331112'
-]
-
-function getNormalizedQRLink(value) {
-  const trimmedValue = value.trim()
-
-  if (!trimmedValue) return ''
-
-  const linkWithProtocol = /^[a-z][a-z\d+.-]*:/i.test(trimmedValue)
-    ? trimmedValue
-    : `https://${trimmedValue}`
-
-  try {
-    const url = new URL(linkWithProtocol)
-
-    if (!['http:', 'https:'].includes(url.protocol)) return ''
-
-    return url.toString()
-  } catch {
-    return ''
-  }
-}
-
 function addQR(dropPoint = null) {
   const link = getNormalizedQRLink(qrLink.value)
   const targetCanvasVersion = canvasVersion
@@ -798,93 +559,6 @@ function addQR(dropPoint = null) {
   }).catch(() => {
     qrError.value = 'Could not generate this QR code.'
   })
-}
-
-function getBarcodeValidationError(value) {
-  if (!value) return 'Enter a value first.'
-  if (value.length > BARCODE_MAX_LENGTH) return `Use ${BARCODE_MAX_LENGTH} characters or fewer.`
-
-  const hasUnsupportedCharacter = Array.from(value).some(char => {
-    const code = char.charCodeAt(0)
-
-    return code < 32 || code > 126
-  })
-
-  return hasUnsupportedCharacter
-    ? 'Use printable ASCII characters only.'
-    : ''
-}
-
-function getCode128BSequence(value) {
-  const dataCodes = Array.from(value, char => char.charCodeAt(0) - 32)
-  const checksum = dataCodes.reduce(
-    (sum, code, index) => sum + code * (index + 1),
-    CODE128_START_B
-  ) % 103
-
-  return [CODE128_START_B, ...dataCodes, checksum, CODE128_STOP]
-}
-
-function getPatternModuleCount(pattern) {
-  return Array.from(pattern).reduce((sum, width) => sum + Number(width), 0)
-}
-
-function drawBarcodeLabel(context, value, width, y) {
-  let fontSize = 14
-  const minFontSize = 8
-
-  do {
-    context.font = `${fontSize}px Arial`
-    if (context.measureText(value).width <= width - 16) break
-    fontSize -= 1
-  } while (fontSize >= minFontSize)
-
-  context.fillStyle = '#111'
-  context.textAlign = 'center'
-  context.textBaseline = 'middle'
-  context.fillText(value, width / 2, y)
-}
-
-function createBarcodeDataURL(value) {
-  const sequence = getCode128BSequence(value)
-  const barcodeModules = sequence.reduce((sum, code) => (
-    sum + getPatternModuleCount(CODE128_B_PATTERNS[code])
-  ), 0)
-  const width = (barcodeModules + BARCODE_QUIET_ZONE_MODULES * 2) * BARCODE_MODULE_WIDTH
-  const height = BARCODE_BAR_HEIGHT + BARCODE_LABEL_HEIGHT
-  const canvas = document.createElement('canvas')
-  const context = canvas.getContext('2d')
-
-  if (!context) throw new Error('Canvas is not available.')
-
-  canvas.width = width
-  canvas.height = height
-
-  context.fillStyle = '#fff'
-  context.fillRect(0, 0, width, height)
-
-  let x = BARCODE_QUIET_ZONE_MODULES * BARCODE_MODULE_WIDTH
-
-  sequence.forEach(code => {
-    const pattern = CODE128_B_PATTERNS[code]
-    let isBar = true
-
-    Array.from(pattern).forEach(moduleWidth => {
-      const segmentWidth = Number(moduleWidth) * BARCODE_MODULE_WIDTH
-
-      if (isBar) {
-        context.fillStyle = '#000'
-        context.fillRect(x, 0, segmentWidth, BARCODE_BAR_HEIGHT)
-      }
-
-      x += segmentWidth
-      isBar = !isBar
-    })
-  })
-
-  drawBarcodeLabel(context, value, width, BARCODE_BAR_HEIGHT + BARCODE_LABEL_HEIGHT / 2)
-
-  return canvas.toDataURL('image/png')
 }
 
 function addBarcode(dropPoint = null) {
@@ -2024,13 +1698,6 @@ function setRef(el, id) {
   }
 }
 
-function clampNumber(value, min, max) {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return min
-
-  return Math.min(Math.max(numericValue, min), max)
-}
-
 function getRulerTicks(length) {
   const unitPixels = rulerUnitPixels.value
   const minorDivisions = rulerMinorDivisions.value
@@ -2513,238 +2180,6 @@ function setLabelFontSize(item, value) {
   item.textConfig.fontSize = getFontSizeValue(value)
 }
 
-function canShapeHaveFill(item) {
-  return fillableShapeTypes.includes(item?.type)
-}
-
-function canShapeHaveCornerRadius(item) {
-  return item?.type === 'rect'
-}
-
-function getShapeStrokeWidthMin(item) {
-  return item?.type === 'line' ? 1 : 0
-}
-
-function getShapeCornerRadiusMax(item) {
-  if (!item || item.type !== 'rect') return 0
-
-  return Math.floor(Math.min(item.width || 0, item.height || 0) / 2)
-}
-
-function getCornerRadiusMax(item) {
-  if (!item) return 0
-
-  if (item.type === 'image' || item.type === 'rect') {
-    return Math.floor(Math.min(item.width || 0, item.height || 0) / 2)
-  }
-
-  return 0
-}
-
-function getCornerRadiusValues(item) {
-  const max = getCornerRadiusMax(item)
-  const source = item?.cornerRadius
-  let values
-
-  if (Array.isArray(source)) {
-    values = source
-  } else if (typeof source === 'object' && source) {
-    values = [
-      source.topLeft,
-      source.topRight,
-      source.bottomRight,
-      source.bottomLeft
-    ]
-  } else {
-    values = [source, source, source, source]
-  }
-
-  return values.map(value => Math.round(clampNumber(value, 0, max)))
-}
-
-function getCornerRadiusValue(item, index) {
-  return getCornerRadiusValues(item)[index] || 0
-}
-
-function setCornerRadiusValue(item, index, value) {
-  if (!item) return
-
-  const values = getCornerRadiusValues(item)
-  values[index] = Math.round(clampNumber(value, 0, getCornerRadiusMax(item)))
-  item.cornerRadius = values
-}
-
-function getCornerRadiusConfig(item) {
-  return getCornerRadiusValues(item)
-}
-
-function getShapePanelTitle(item) {
-  return `${shapeLabels[item?.type] || 'Shape'} Settings`
-}
-
-function getShapeBorderStyle(value) {
-  const borderStyle = String(value || '').trim()
-
-  if (borderStyleValues.has(borderStyle)) return borderStyle
-
-  return borderStyleAliases[borderStyle.toLowerCase()] || defaultShapeSettings.borderStyle
-}
-
-function getShapeBorderStyleFromDash(dash) {
-  if (!Array.isArray(dash) || !dash.length) return defaultShapeSettings.borderStyle
-
-  const pattern = dash
-    .map(value => Number(value))
-    .filter(value => Number.isFinite(value) && value > 0)
-
-  if (pattern.length >= 4) return 'dashDot'
-  if (pattern[0] <= 2) return 'dotted'
-
-  return 'dashed'
-}
-
-function getBorderWidthValue(value) {
-  return Math.round(clampNumber(value, 0, 24))
-}
-
-function getBorderDash(borderStyleValue, borderWidthValue) {
-  const borderStyle = getShapeBorderStyle(borderStyleValue)
-  const borderWidth = Math.max(1, Number(borderWidthValue) || defaultShapeSettings.strokeWidth)
-  const gapLength = Math.max(3, Math.round(borderWidth * 2))
-  const dashLength = Math.max(6, Math.round(borderWidth * 4))
-  const dotLength = Math.max(1, Math.round(borderWidth))
-
-  if (borderStyle === 'dashed') return [dashLength, gapLength]
-  if (borderStyle === 'dotted') return [dotLength, gapLength]
-  if (borderStyle === 'dashDot') return [dashLength, gapLength, dotLength, gapLength]
-
-  return []
-}
-
-function getBorderLineConfig(borderStyleValue, borderWidthValue) {
-  const dash = getBorderDash(borderStyleValue, borderWidthValue)
-
-  return {
-    dash,
-    dashEnabled: dash.length > 0,
-    ...(dash.length ? { lineCap: 'round' } : {})
-  }
-}
-
-function getShapeBorderDash(item) {
-  return getBorderDash(item?.borderStyle, item?.strokeWidth)
-}
-
-function getShapeBorderConfig(item) {
-  return getBorderLineConfig(item?.borderStyle, item?.strokeWidth)
-}
-
-function getElementBorderColor(item) {
-  return getHexColor(item?.borderColor, defaultElementBorderSettings.borderColor)
-}
-
-function getElementBorderConfig(item, config = {}) {
-  const borderWidth = getBorderWidthValue(item?.borderWidth ?? defaultElementBorderSettings.borderWidth)
-
-  return {
-    x: config.x ?? 0,
-    y: config.y ?? 0,
-    width: Math.max(1, Number(config.width) || 1),
-    height: Math.max(1, Number(config.height) || 1),
-    rotation: config.rotation || 0,
-    fill: 'rgba(0,0,0,0)',
-    stroke: getElementBorderColor(item),
-    strokeWidth: borderWidth,
-    cornerRadius: config.cornerRadius ?? 0,
-    visible: borderWidth > 0 && config.visible !== false,
-    listening: false,
-    ...getBorderLineConfig(item?.borderStyle, borderWidth)
-  }
-}
-
-function getHexColor(value, fallback) {
-  const color = String(value || '').trim().toLowerCase()
-  const namedColors = {
-    black: '#000000',
-    white: '#ffffff',
-    red: '#ff0000',
-    skyblue: '#87ceeb',
-    transparent: fallback
-  }
-
-  if (/^#[\da-f]{6}$/i.test(color)) return color
-
-  if (/^#[\da-f]{3}$/i.test(color)) {
-    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
-  }
-
-  const rgbMatch = color.match(/^rgba?\(([^)]+)\)$/)
-
-  if (rgbMatch) {
-    const channels = rgbMatch[1]
-      .split(',')
-      .slice(0, 3)
-      .map(channel => Math.round(clampNumber(Number.parseFloat(channel), 0, 255)))
-
-    if (channels.length === 3 && channels.every(Number.isFinite)) {
-      return `#${channels.map(channel => channel.toString(16).padStart(2, '0')).join('')}`
-    }
-  }
-
-  return namedColors[color] || fallback
-}
-
-function canElementHaveBorder(item) {
-  return borderableElementTypes.includes(item?.type)
-}
-
-function ensureElementBorderSettings(item) {
-  if (!canElementHaveBorder(item)) return
-
-  if (item.borderColor === undefined) item.borderColor = defaultElementBorderSettings.borderColor
-  if (item.borderWidth === undefined) item.borderWidth = defaultElementBorderSettings.borderWidth
-  if (item.borderStyle === undefined) item.borderStyle = getShapeBorderStyleFromDash(item.dash)
-
-  item.borderColor = getElementBorderColor(item)
-  item.borderWidth = getBorderWidthValue(item.borderWidth)
-  item.borderStyle = getShapeBorderStyle(item.borderStyle)
-}
-
-function ensureShapeSettings(item) {
-  if (!item || !shapeTypes.includes(item.type)) return
-
-  if (item.stroke === undefined) item.stroke = defaultShapeSettings.stroke
-  if (item.strokeWidth === undefined) item.strokeWidth = defaultShapeSettings.strokeWidth
-  if (item.borderStyle === undefined) item.borderStyle = getShapeBorderStyleFromDash(item.dash)
-  if (item.opacity === undefined) item.opacity = defaultShapeSettings.opacity
-
-  item.stroke = getHexColor(item.stroke, defaultShapeSettings.stroke)
-  item.borderStyle = getShapeBorderStyle(item.borderStyle)
-
-  if (canShapeHaveFill(item) && item.fill === undefined) {
-    item.fill = defaultShapeFills[item.type]
-  }
-
-  if (canShapeHaveFill(item)) {
-    item.fill = getHexColor(item.fill, defaultShapeFills[item.type])
-  }
-
-  if (canShapeHaveCornerRadius(item) && item.cornerRadius === undefined) {
-    item.cornerRadius = 0
-  }
-
-  if (item.type === 'line' || item.type === 'arrow') {
-    if (item.lineCap === undefined) item.lineCap = 'round'
-    if (item.lineJoin === undefined) item.lineJoin = 'round'
-  }
-
-  if (item.type === 'line') {
-    if (item.hitStrokeWidth === undefined) {
-      item.hitStrokeWidth = Math.max(defaultLineHitStrokeWidth, item.strokeWidth || 0)
-    }
-  }
-}
-
 function canShapeHaveRichText(item) {
   return item && ['rect', 'circle', 'polygon', 'triangle', 'line'].includes(item.type)
 }
@@ -2788,61 +2223,6 @@ function ensureShapeTextSettings(item) {
   if (item.shapeTextLineHeight === undefined) item.shapeTextLineHeight = 1.35
   if (item.shapeTextWidth === undefined) item.shapeTextWidth = defaultSize.width
   if (item.shapeTextHeight === undefined) item.shapeTextHeight = defaultSize.height
-}
-
-function getRotatedPoint(originX, originY, localX, localY, rotation = 0) {
-  const angle = rotation * Math.PI / 180
-  const cos = Math.cos(angle)
-  const sin = Math.sin(angle)
-
-  return {
-    x: originX + localX * cos - localY * sin,
-    y: originY + localX * sin + localY * cos
-  }
-}
-
-function getLineRawBounds(item) {
-  const points = item.points || []
-  const xs = []
-  const ys = []
-
-  for (let index = 0; index < points.length; index += 2) {
-    xs.push(points[index])
-    ys.push(points[index + 1])
-  }
-
-  if (!xs.length || !ys.length) {
-    return {
-      minX: 0,
-      minY: 0,
-      width: 160,
-      height: 0,
-      pointCount: 0
-    }
-  }
-
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
-
-  return {
-    minX,
-    minY,
-    width: maxX - minX,
-    height: maxY - minY,
-    pointCount: xs.length
-  }
-}
-
-function getLineLocalBounds(item) {
-  const bounds = getLineRawBounds(item)
-
-  return {
-    ...bounds,
-    width: Math.max(1, bounds.width),
-    height: Math.max(1, bounds.height)
-  }
 }
 
 function getFallbackElementPixelDimensions(item) {
