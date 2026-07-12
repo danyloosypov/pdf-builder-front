@@ -271,6 +271,160 @@ export default {
         </div>
       </div>
 
+      <div class="bands-panel">
+        <div class="panel-title">Bands</div>
+
+        <label class="control-row">
+          <span>New Band</span>
+          <select v-model="newBandType" class="control-select">
+            <optgroup
+                v-for="group in bandTypeGroups"
+                :key="group.id"
+                :label="group.label"
+            >
+              <option
+                  v-for="option in getBandTypeOptionsForGroup(group.id)"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </optgroup>
+          </select>
+        </label>
+
+        <button type="button" class="band-add-button" @click="addBand()">
+          Add Band
+        </button>
+
+        <div v-if="hasBands" class="band-list">
+          <button
+              v-for="(band, index) in bands"
+              :key="band.id"
+              type="button"
+              :class="{ active: band.id === activeBandId, disabled: !band.enabled }"
+              @click="selectBand(band.id)"
+          >
+            <span>{{ getBandTitle(band, index) }}</span>
+            <small>{{ getBandListMeta(band) }}</small>
+          </button>
+        </div>
+        <p v-else class="empty-layer-list">
+          Add a band to define reusable document sections.
+        </p>
+
+        <div v-if="activeBand" class="band-settings">
+          <label class="checkbox-control">
+            <input v-model="activeBand.enabled" type="checkbox">
+            <span>Enabled</span>
+          </label>
+
+          <label class="control-row">
+            <span>Name</span>
+            <input v-model.trim="activeBand.name" class="chart-text-input" type="text">
+          </label>
+
+          <label class="control-row">
+            <span>Type</span>
+            <select
+                :value="activeBand.type"
+                class="control-select"
+                @change="setBandType(activeBand, $event.target.value)"
+            >
+              <optgroup
+                  v-for="group in bandTypeGroups"
+                  :key="group.id"
+                  :label="group.label"
+              >
+                <option
+                    v-for="option in getBandTypeOptionsForGroup(group.id)"
+                    :key="option.value"
+                    :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </optgroup>
+            </select>
+          </label>
+
+          <label class="control-row">
+            <span>Height (px)</span>
+            <input
+                :value="activeBand.height"
+                class="chart-text-input"
+                type="number"
+                min="12"
+                max="2000"
+                step="1"
+                :disabled="getBandPlacement(activeBand) === 'full'"
+                @input="setBandHeight(activeBand, $event.target.value)"
+            >
+          </label>
+
+          <label class="control-row">
+            <span>Data Source</span>
+            <input
+                v-model.trim="activeBand.dataSource"
+                class="chart-text-input"
+                type="text"
+                placeholder="orders.items"
+            >
+          </label>
+
+          <label class="control-row">
+            <span>Group By</span>
+            <input
+                v-model.trim="activeBand.groupBy"
+                class="chart-text-input"
+                type="text"
+                placeholder="country.city"
+            >
+          </label>
+
+          <label class="control-row">
+            <span>Parent Band</span>
+            <select v-model="activeBand.parentBandId" class="control-select">
+              <option value="">None</option>
+              <option
+                  v-for="band in bands"
+                  :key="band.id"
+                  :value="band.id"
+                  :disabled="band.id === activeBand.id"
+              >
+                {{ getBandTitle(band) }}
+              </option>
+            </select>
+          </label>
+
+          <div class="band-button-grid">
+            <button
+                type="button"
+                :disabled="bands[0]?.id === activeBand.id"
+                @click="moveBand(activeBand.id, -1)"
+            >
+              Up
+            </button>
+            <button
+                type="button"
+                :disabled="bands[bands.length - 1]?.id === activeBand.id"
+                @click="moveBand(activeBand.id, 1)"
+            >
+              Down
+            </button>
+            <button
+                type="button"
+                :disabled="!selectedItems.length"
+                @click="assignSelectedElementsToActiveBand"
+            >
+              Assign
+            </button>
+            <button type="button" class="band-delete-button" @click="deleteBand(activeBand.id)">
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div class="element-tabs-panel">
         <div class="panel-title">Элементы</div>
 
@@ -662,6 +816,24 @@ export default {
             Top
           </button>
         </div>
+
+        <label v-if="hasBands" class="control-row">
+          <span>Band</span>
+          <select
+              :value="getElementBandId(selectedItem)"
+              class="control-select"
+              @change="setSelectedElementsBand($event.target.value)"
+          >
+            <option value="">None</option>
+            <option
+                v-for="band in bands"
+                :key="band.id"
+                :value="band.id"
+            >
+              {{ getBandTitle(band) }}
+            </option>
+          </select>
+        </label>
 
         <div class="layer-readout">
           Layer {{ selectedLayerIndex + 1 }} of {{ canvasItems.length }}
@@ -1456,6 +1628,14 @@ export default {
             <v-rect :config="pageConfig" />
             <v-rect :config="pageMarginGuideConfig" />
             <v-group :config="pageClipConfig">
+              <v-group
+                  v-for="guide in bandGuideConfigs"
+                  :key="guide.id"
+              >
+                <v-rect :config="guide.rect" />
+                <v-text :config="guide.label" />
+              </v-group>
+
               <CanvasItem
                   v-for="item in canvasItems"
                   :key="item.id"
@@ -1546,6 +1726,19 @@ export default {
               <v-text
                   v-if="pageNumberConfig.visible"
                   :config="pageNumberConfig"
+              />
+
+              <v-line
+                  v-for="handle in bandResizeHandleConfigs"
+                  :key="handle.id"
+                  :config="handle"
+                  @mousedown="handleBandResizePointerDown($event, handle)"
+                  @touchstart="handleBandResizePointerDown($event, handle)"
+                  @mouseenter="setBandResizeCursor($event)"
+                  @mouseleave="clearBandResizeCursor($event)"
+                  @dragstart="startBandResizeDrag($event, handle)"
+                  @dragmove="resizeBandFromHandleDrag($event, handle)"
+                  @dragend="finishBandResizeDrag($event, handle)"
               />
             </v-group>
 

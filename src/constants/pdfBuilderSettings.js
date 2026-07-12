@@ -22,6 +22,43 @@ export const pageMarginPresets = [
   { label: 'Custom', value: 'custom' }
 ]
 
+export const bandTypeGroups = [
+  { id: 'document', label: 'Document Bands' },
+  { id: 'page', label: 'Page Bands' },
+  { id: 'data', label: 'Data Bands' },
+  { id: 'group', label: 'Group Bands' },
+  { id: 'support', label: 'Support Bands' },
+  { id: 'table', label: 'Table Bands' }
+]
+
+export const bandTypeOptions = [
+  { value: 'document-header', label: 'Document Header', group: 'document', placement: 'top', scope: 'document-start', defaultHeight: 72, color: '#2563eb' },
+  { value: 'document-footer', label: 'Document Footer', group: 'document', placement: 'bottom', scope: 'document-end', defaultHeight: 72, color: '#2563eb' },
+  { value: 'no-data', label: 'No Data Band', group: 'document', placement: 'body', scope: 'when-empty', defaultHeight: 96, color: '#64748b' },
+  { value: 'page-header', label: 'Page Header', group: 'page', placement: 'top', scope: 'every-page', defaultHeight: 64, color: '#0f766e' },
+  { value: 'page-footer', label: 'Page Footer', group: 'page', placement: 'bottom', scope: 'every-page', defaultHeight: 64, color: '#0f766e' },
+  { value: 'master-data', label: 'Master Data Band', group: 'data', placement: 'body', scope: 'master-records', defaultHeight: 80, color: '#15803d' },
+  { value: 'data-header', label: 'Data Header', group: 'data', placement: 'body', scope: 'before-data', defaultHeight: 48, color: '#65a30d' },
+  { value: 'data-footer', label: 'Data Footer', group: 'data', placement: 'body', scope: 'after-data', defaultHeight: 48, color: '#65a30d' },
+  { value: 'detail-header', label: 'Detail Header', group: 'data', placement: 'body', scope: 'before-detail', defaultHeight: 44, color: '#84cc16' },
+  { value: 'detail-footer', label: 'Detail Footer', group: 'data', placement: 'body', scope: 'after-detail', defaultHeight: 44, color: '#84cc16' },
+  { value: 'empty-data', label: 'Empty Data Band', group: 'data', placement: 'body', scope: 'empty-fill', defaultHeight: 40, color: '#4d7c0f' },
+  { value: 'group-header', label: 'Group Header', group: 'group', placement: 'body', scope: 'group-start', defaultHeight: 52, color: '#db2777' },
+  { value: 'group-footer', label: 'Group Footer', group: 'group', placement: 'body', scope: 'group-end', defaultHeight: 52, color: '#db2777' },
+  { value: 'nested-group-header', label: 'Nested Group Header', group: 'group', placement: 'body', scope: 'nested-group-start', defaultHeight: 44, color: '#be185d' },
+  { value: 'nested-group-footer', label: 'Nested Group Footer', group: 'group', placement: 'body', scope: 'nested-group-end', defaultHeight: 44, color: '#be185d' },
+  { value: 'child', label: 'Child Band', group: 'support', placement: 'body', scope: 'after-parent', defaultHeight: 48, color: '#475569' },
+  { value: 'continuation', label: 'Continuation Band', group: 'support', placement: 'top', scope: 'continued-page', defaultHeight: 44, color: '#475569' },
+  { value: 'break', label: 'Break Band', group: 'support', placement: 'body', scope: 'page-or-column-break', defaultHeight: 24, color: '#dc2626' },
+  { value: 'spacer', label: 'Spacer Band', group: 'support', placement: 'body', scope: 'spacing', defaultHeight: 36, color: '#64748b' },
+  { value: 'overlay', label: 'Overlay Band', group: 'support', placement: 'full', scope: 'over-content', defaultHeight: 0, color: '#0ea5e9' },
+  { value: 'background', label: 'Background Band', group: 'support', placement: 'full', scope: 'under-content', defaultHeight: 0, color: '#64748b' },
+  { value: 'watermark', label: 'Watermark Band', group: 'support', placement: 'full', scope: 'under-content', defaultHeight: 0, color: '#94a3b8' },
+  { value: 'table-header', label: 'Table Header Band', group: 'table', placement: 'body', scope: 'table-header', defaultHeight: 44, color: '#7c2d12' },
+  { value: 'table-detail', label: 'Table Detail Band', group: 'table', placement: 'body', scope: 'table-row', defaultHeight: 44, color: '#9a3412' },
+  { value: 'table-footer', label: 'Table Footer Band', group: 'table', placement: 'body', scope: 'table-footer', defaultHeight: 44, color: '#7c2d12' }
+]
+
 export const sidebarElementTabs = [
   { id: 'text', label: 'Текстовые элементы' },
   { id: 'shapes', label: 'Фигуры' },

@@ -22,6 +22,8 @@ import {
   PAGE_STAGE_PADDING_Y,
   PX_PER_INCH,
   SIDEBAR_ELEMENT_DRAG_TYPE,
+  bandTypeGroups,
+  bandTypeOptions,
   borderStyleOptions,
   borderableElementTypes,
   cornerRadiusFields,
@@ -120,11 +122,64 @@ import { getNormalizedQRLink } from '../utils/qr'
 export function usePdfBuilder() {
 
 let generatedPageIdCounter = 0
+let generatedBandIdCounter = 0
+const DEFAULT_BAND_TYPE = 'page-header'
 
 function createPageId() {
   generatedPageIdCounter += 1
 
   return `page-${Date.now()}-${generatedPageIdCounter}`
+}
+
+function createBandId() {
+  generatedBandIdCounter += 1
+
+  return `band-${Date.now()}-${generatedBandIdCounter}`
+}
+
+function getBandTypeOption(type) {
+  return bandTypeOptions.find(option => option.value === type) ||
+    bandTypeOptions.find(option => option.value === DEFAULT_BAND_TYPE) ||
+    bandTypeOptions[0]
+}
+
+function getNormalizedBandType(value) {
+  const type = String(value || '').trim()
+
+  if (bandTypeOptions.some(option => option.value === type)) return type
+  if (type.endsWith('-footer')) return 'page-footer'
+  if (type.endsWith('-header')) return 'page-header'
+  if (['data-band', 'detail-data'].includes(type)) return 'master-data'
+
+  return DEFAULT_BAND_TYPE
+}
+
+function getNormalizedBandHeight(value, type = DEFAULT_BAND_TYPE) {
+  const option = getBandTypeOption(type)
+  if (option?.placement === 'full') return 0
+
+  const defaultHeight = Number(option?.defaultHeight) || 60
+  const height = Number(value)
+
+  if (!Number.isFinite(height)) return defaultHeight
+
+  return clampNumber(Math.round(height), 12, 2000)
+}
+
+function createDocumentBand(type = DEFAULT_BAND_TYPE, options = {}) {
+  const normalizedType = getNormalizedBandType(type)
+  const option = getBandTypeOption(normalizedType)
+
+  return {
+    id: String(options.id || createBandId()),
+    type: normalizedType,
+    name: String(options.name || option.label),
+    enabled: options.enabled !== false,
+    height: getNormalizedBandHeight(options.height, normalizedType),
+    dataSource: String(options.dataSource || ''),
+    groupBy: String(options.groupBy || ''),
+    parentBandId: String(options.parentBandId || '')
+  }
 }
 
 function getNormalizedPageOrientation(value) {
@@ -146,6 +201,10 @@ function createCanvasPage(name = '', options = {}) {
 
 const pages = ref([createCanvasPage('Page 1')])
 const activePageId = ref(pages.value[0].id)
+const bands = ref([])
+const activeBandId = ref('')
+const newBandType = ref('page-header')
+let isSyncingRepeatedBandElements = false
 const activePageIndex = computed(() => {
   const index = pages.value.findIndex(page => page.id === activePageId.value)
 
@@ -408,6 +467,10 @@ const pageClipConfig = computed(() => ({
   clipWidth: pageConfig.value.width,
   clipHeight: pageConfig.value.height
 }))
+const activeBand = computed(() => bands.value.find(band => band.id === activeBandId.value) || null)
+const hasBands = computed(() => bands.value.length > 0)
+const bandGuideConfigs = computed(() => getBandGuideConfigs())
+const bandResizeHandleConfigs = computed(() => getBandResizeHandleConfigs())
 const stageConfig = computed(() => ({
   width: pagePixelSize.value.width + PAGE_STAGE_PADDING_X,
   height: pagePixelSize.value.height + PAGE_STAGE_PADDING_Y
@@ -459,6 +522,7 @@ const selectedTableCellIds = ref([])
 const editingTableCell = ref(null)
 const tableCellEditorValue = ref('')
 const tableResizeDrag = ref(null)
+const bandResizeDrag = ref(null)
 const draggedSidebarElementType = ref(null)
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
@@ -499,6 +563,7 @@ const DEFAULT_LINK_TEXT_COLOR = '#2563eb'
 const linkUrlInput = ref('')
 const TABLE_RESIZE_MIN_TRACK_SIZE = 16
 const TABLE_RESIZE_HANDLE_HIT_SIZE = 12
+const BAND_RESIZE_HANDLE_HIT_SIZE = 12
 
 const RichTextStyle = createRichTextStyleExtension({
   getHexColor,
@@ -635,6 +700,7 @@ function addPage() {
   })
 
   pages.value.push(page)
+  syncRepeatedBandElements()
   selectPage(page.id)
 }
 
@@ -655,9 +721,10 @@ function duplicatePage(pageId = activePageId.value) {
     assignClonedCanvasItemIds(clonedItem, usedIds)
 
     return clonedItem
-  })
+  }).filter(item => !isBandSyncedAcrossPages(getBandById(item.bandId)))
 
   pages.value.splice(sourceIndex + 1, 0, page)
+  syncRepeatedBandElements()
   selectPage(page.id)
 }
 
@@ -675,7 +742,9 @@ function deletePage(pageId = activePageId.value) {
 
   if (isDeletingActivePage) resetCanvasInteractionState()
 
+  promoteRepeatedBandMastersFromPage(pages.value[pageIndex])
   pages.value.splice(pageIndex, 1)
+  syncRepeatedBandElements()
 
   if (isDeletingActivePage) {
     const nextPage = pages.value[Math.min(pageIndex, pages.value.length - 1)]
@@ -691,6 +760,845 @@ function renamePage(pageId, name) {
   if (!page) return
 
   page.name = String(name ?? '')
+}
+
+function getBandTypeOptionsForGroup(groupId) {
+  return bandTypeOptions.filter(option => option.group === groupId)
+}
+
+function getBandTypeLabel(type) {
+  return getBandTypeOption(type)?.label || 'Band'
+}
+
+function getBandTitle(band, index = -1) {
+  const name = String(band?.name || '').trim()
+
+  if (name) return name
+
+  const fallback = getBandTypeLabel(band?.type)
+
+  return index >= 0 ? `${fallback} ${index + 1}` : fallback
+}
+
+function getBandScopeLabel(band) {
+  return getBandTypeOption(band?.type)?.scope || 'custom'
+}
+
+function getBandPlacement(band) {
+  return getBandTypeOption(band?.type)?.placement || 'body'
+}
+
+function getBandColor(band) {
+  return band?.color || getBandTypeOption(band?.type)?.color || '#2563eb'
+}
+
+function getBandHeight(band) {
+  return getNormalizedBandHeight(band?.height, band?.type)
+}
+
+function getBandElementOffsetSnapshots() {
+  const snapshots = []
+
+  pages.value.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      const band = getBandById(item?.bandId)
+      const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+
+      if (!segment) return
+
+      snapshots.push({
+        pageId: page.id,
+        elementId: item.id,
+        bandId: band.id,
+        offsetX: getItemCoordinate(item, 'x') - segment.x,
+        offsetY: getItemCoordinate(item, 'y') - segment.y
+      })
+    })
+  })
+
+  return snapshots
+}
+
+function restoreBandElementOffsetSnapshots(snapshots = []) {
+  snapshots.forEach(snapshot => {
+    const pageIndex = pages.value.findIndex(page => String(page.id) === String(snapshot.pageId))
+    const page = pages.value[pageIndex]
+    const item = Array.isArray(page?.elements)
+      ? page.elements.find(element => String(element.id) === String(snapshot.elementId))
+      : null
+    const band = getBandById(snapshot.bandId)
+    const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+
+    if (!item || !segment) return
+
+    item.x = segment.x + snapshot.offsetX
+    item.y = segment.y + snapshot.offsetY
+
+    if (String(item.bandId || '') === String(snapshot.bandId)) {
+      item.bandOffsetX = snapshot.offsetX
+      item.bandOffsetY = snapshot.offsetY
+    }
+  })
+}
+
+function updateBandHeight(band, value, options = {}) {
+  if (!band) return
+
+  const snapshots = options.preserveElementOffsets === false
+    ? []
+    : getBandElementOffsetSnapshots()
+
+  band.height = getNormalizedBandHeight(value, band.type)
+
+  if (snapshots.length) {
+    restoreBandElementOffsetSnapshots(snapshots)
+  }
+
+  syncRepeatedBandElements()
+}
+
+function getBandElementCount(bandId, options = {}) {
+  const id = String(bandId || '')
+  const sourcePages = options.activePageOnly ? [activePage.value] : pages.value
+
+  if (!id) return 0
+
+  return sourcePages.reduce((count, page) => (
+    count + (Array.isArray(page?.elements)
+      ? page.elements.filter(item => String(item?.bandId || '') === id).length
+      : 0)
+  ), 0)
+}
+
+function getBandListMeta(band) {
+  const total = getBandElementCount(band?.id)
+  const onPage = getBandElementCount(band?.id, { activePageOnly: true })
+  const height = getBandPlacement(band) === 'full' ? 'full page' : `${getBandHeight(band)}px`
+
+  return `${getBandTypeLabel(band?.type)} / ${height} / ${onPage}/${total} item${total === 1 ? '' : 's'}`
+}
+
+function isBandVisibleOnPage(band, pageIndex = activePageIndex.value, pageCount = pages.value.length) {
+  if (!band?.enabled) return false
+
+  const type = getNormalizedBandType(band.type)
+
+  if (type === 'document-header') return pageIndex === 0
+  if (type === 'document-footer') return pageIndex === Math.max(0, pageCount - 1)
+
+  return true
+}
+
+function normalizeBandForStorage(band, usedIds = new Set()) {
+  const normalizedBand = createDocumentBand(band?.type, band || {})
+  let id = String(normalizedBand.id || '').trim()
+
+  if (!id || usedIds.has(id)) id = createBandId()
+
+  usedIds.add(id)
+  normalizedBand.id = id
+
+  return normalizedBand
+}
+
+function addBand(type = newBandType.value) {
+  const band = createDocumentBand(type)
+
+  bands.value.push(band)
+  activeBandId.value = band.id
+}
+
+function selectBand(bandId) {
+  activeBandId.value = bands.value.some(band => band.id === bandId) ? bandId : ''
+}
+
+function setBandType(band, type) {
+  if (!band) return
+
+  const snapshots = getBandElementOffsetSnapshots()
+  const previousTypeLabel = getBandTypeLabel(band.type)
+  const nextType = getNormalizedBandType(type)
+  const nextTypeLabel = getBandTypeLabel(nextType)
+  const shouldRename = !String(band.name || '').trim() || band.name === previousTypeLabel
+
+  band.type = nextType
+  band.height = getNormalizedBandHeight(band.height, nextType)
+
+  if (shouldRename) band.name = nextTypeLabel
+
+  if (!isBandSyncedAcrossPages(band)) {
+    clearRepeatedBandMetadataForBand(band.id)
+  }
+
+  restoreBandElementOffsetSnapshots(snapshots)
+  syncRepeatedBandElements()
+}
+
+function setBandHeight(band, value) {
+  updateBandHeight(band, value)
+}
+
+function moveBand(bandId, direction) {
+  const snapshots = getBandElementOffsetSnapshots()
+  const index = bands.value.findIndex(band => band.id === bandId)
+  const nextIndex = index + direction
+
+  if (index < 0 || nextIndex < 0 || nextIndex >= bands.value.length) return
+
+  const nextBands = [...bands.value]
+  const [band] = nextBands.splice(index, 1)
+
+  nextBands.splice(nextIndex, 0, band)
+  bands.value = nextBands
+  restoreBandElementOffsetSnapshots(snapshots)
+  syncRepeatedBandElements()
+}
+
+function clearBandFromElements(bandId) {
+  const id = String(bandId || '')
+
+  if (!id) return
+
+  getAllPageElements().forEach(item => {
+    if (String(item?.bandId || '') === id) {
+      item.bandId = ''
+      clearRepeatedBandElementMetadata(item)
+    }
+  })
+}
+
+function clearRepeatedBandMetadataForBand(bandId) {
+  const id = String(bandId || '')
+
+  if (!id) return
+
+  getAllPageElements().forEach(item => {
+    if (String(item?.bandId || '') === id) {
+      clearRepeatedBandElementMetadata(item)
+    }
+  })
+}
+
+function deleteBand(bandId = activeBandId.value) {
+  const index = bands.value.findIndex(band => band.id === bandId)
+
+  if (index < 0) return
+
+  clearBandFromElements(bandId)
+  bands.value.splice(index, 1)
+  activeBandId.value = bands.value[Math.min(index, bands.value.length - 1)]?.id || ''
+  syncRepeatedBandElements()
+}
+
+function getElementBandId(item) {
+  const bandId = String(item?.bandId || '')
+
+  return bands.value.some(band => band.id === bandId) ? bandId : ''
+}
+
+function setSelectedElementsBand(bandId) {
+  const nextBand = getBandById(bandId)
+  const nextBandId = nextBand ? nextBand.id : ''
+
+  selectedItems.value.forEach(item => {
+    item.bandId = nextBandId
+
+    if (isBandSyncedAcrossPages(nextBand)) {
+      const itemInfo = getPageElementInfo(item)
+      const sourceSegment = getBandSegmentForPageIndex(nextBand, itemInfo?.pageIndex ?? activePageIndex.value)
+
+      ensureRepeatedBandMasterMetadata(item, itemInfo?.page || activePage.value, sourceSegment)
+    } else {
+      clearRepeatedBandElementMetadata(item)
+    }
+  })
+
+  syncRepeatedBandElements()
+}
+
+function assignSelectedElementsToActiveBand() {
+  if (!activeBand.value || !selectedItems.value.length) return
+
+  setSelectedElementsBand(activeBand.value.id)
+}
+
+function getSerializableBands() {
+  const usedIds = new Set()
+
+  return bands.value.map(band => getSerializableLayoutValue(normalizeBandForStorage(band, usedIds)))
+}
+
+function applyImportedBands(importedBands = [], importedActiveBandId = '') {
+  const usedIds = new Set()
+  const nextBands = Array.isArray(importedBands)
+    ? importedBands
+      .filter(band => band && typeof band === 'object')
+      .map(band => normalizeBandForStorage(band, usedIds))
+    : []
+
+  bands.value = nextBands
+  activeBandId.value = nextBands.some(band => band.id === importedActiveBandId)
+    ? importedActiveBandId
+    : nextBands[0]?.id || ''
+}
+
+function getImportedBands(data) {
+  if (Array.isArray(data?.bands)) return data.bands
+  if (Array.isArray(data?.bandDefinitions)) return data.bandDefinitions
+
+  return []
+}
+
+function getRgbaColor(hexColor, alpha) {
+  const hex = String(hexColor || '').replace('#', '')
+  const normalized = hex.length === 3
+    ? hex.split('').map(char => `${char}${char}`).join('')
+    : hex
+
+  if (!/^[\da-f]{6}$/i.test(normalized)) return `rgba(37,99,235,${alpha})`
+
+  const red = parseInt(normalized.slice(0, 2), 16)
+  const green = parseInt(normalized.slice(2, 4), 16)
+  const blue = parseInt(normalized.slice(4, 6), 16)
+
+  return `rgba(${red},${green},${blue},${alpha})`
+}
+
+function createBandGuideConfig(band, segment, index) {
+  const color = getBandColor(band)
+  const isActive = String(activeBandId.value) === String(band.id)
+  const label = `${getBandTitle(band, index)} - ${getBandTypeLabel(band.type)}`
+
+  return {
+    id: `${band.id}-${segment.kind}-guide`,
+    bandId: band.id,
+    rect: {
+      x: segment.x,
+      y: segment.y,
+      width: segment.width,
+      height: segment.height,
+      fill: getRgbaColor(color, isActive ? 0.12 : 0.06),
+      stroke: color,
+      strokeWidth: isActive ? 2 : 1,
+      dash: segment.kind === 'full' ? [10, 6] : [7, 5],
+      listening: false,
+      perfectDrawEnabled: false
+    },
+    label: {
+      x: segment.x + 6,
+      y: segment.y + 4,
+      width: Math.max(1, segment.width - 12),
+      height: Math.min(22, Math.max(12, segment.height - 8)),
+      text: label,
+      fill: color,
+      fontSize: 11,
+      fontFamily: 'Arial, sans-serif',
+      fontStyle: isActive ? 'bold' : 'normal',
+      listening: false,
+      perfectDrawEnabled: false
+    }
+  }
+}
+
+function getPageConfigForPageIndex(pageIndex = activePageIndex.value) {
+  const page = pages.value[pageIndex] || activePage.value || pages.value[0]
+  const size = getPagePixelSizeForOrientation(page?.orientation)
+
+  return {
+    width: size.width,
+    height: size.height,
+    x: PAGE_OFFSET_X,
+    y: PAGE_OFFSET_Y
+  }
+}
+
+function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
+  if ((isPdfExporting.value && !options.includeDuringExport) || !bands.value.length) return []
+
+  const page = getPageConfigForPageIndex(pageIndex)
+  const visibleBands = bands.value.filter(band => isBandVisibleOnPage(band, pageIndex, pages.value.length))
+  const fullBands = visibleBands.filter(band => getBandPlacement(band) === 'full')
+  const topBands = visibleBands.filter(band => getBandPlacement(band) === 'top')
+  const bottomBands = visibleBands.filter(band => getBandPlacement(band) === 'bottom')
+  const bodyBands = visibleBands.filter(band => getBandPlacement(band) === 'body')
+  const segments = []
+  let topY = page.y
+  let bottomY = page.y + page.height
+
+  fullBands.forEach(band => {
+    segments.push({
+      band,
+      kind: 'full',
+      x: page.x,
+      y: page.y,
+      width: page.width,
+      height: page.height
+    })
+  })
+
+  topBands.forEach(band => {
+    const height = Math.min(getBandHeight(band), Math.max(12, bottomY - topY))
+
+    segments.push({
+      band,
+      kind: 'top',
+      x: page.x,
+      y: topY,
+      width: page.width,
+      height
+    })
+
+    topY += height
+  })
+
+  bottomBands.forEach(band => {
+    const height = Math.min(getBandHeight(band), Math.max(12, bottomY - topY))
+
+    bottomY -= height
+    segments.push({
+      band,
+      kind: 'bottom',
+      x: page.x,
+      y: bottomY,
+      width: page.width,
+      height
+    })
+  })
+
+  bodyBands.forEach(band => {
+    const availableHeight = Math.max(12, bottomY - topY)
+    const height = Math.min(getBandHeight(band), availableHeight)
+
+    segments.push({
+      band,
+      kind: 'body',
+      x: page.x,
+      y: topY,
+      width: page.width,
+      height
+    })
+
+    topY += height
+  })
+
+  return segments
+}
+
+function getBandGuideConfigs() {
+  return getBandGuideSegments().map((segment, index) => (
+    createBandGuideConfig(segment.band, segment, index)
+  ))
+}
+
+function getBandResizeHandleY(segment) {
+  return segment.kind === 'bottom'
+    ? segment.y
+    : segment.y + segment.height
+}
+
+function getBandResizeDirection(segment) {
+  return segment.kind === 'bottom' ? -1 : 1
+}
+
+function getBandResizeMaxHeight(segment, pageIndex = activePageIndex.value) {
+  const page = getPageConfigForPageIndex(pageIndex)
+
+  if (segment.kind === 'bottom') {
+    return Math.max(12, segment.y + segment.height - page.y)
+  }
+
+  return Math.max(12, page.y + page.height - segment.y)
+}
+
+function isBandResizeHandleVisible(segment) {
+  return Boolean(
+    segment?.band &&
+    !isPdfExporting.value &&
+    getBandPlacement(segment.band) !== 'full'
+  )
+}
+
+function getBandResizeHandleConfigs() {
+  return getBandGuideSegments()
+    .filter(isBandResizeHandleVisible)
+    .map(segment => ({
+      id: `${segment.band.id}-${segment.kind}-resize-handle`,
+      bandId: segment.band.id,
+      segmentKind: segment.kind,
+      resizeDirection: getBandResizeDirection(segment),
+      x: segment.x,
+      y: getBandResizeHandleY(segment),
+      points: [0, 0, segment.width, 0],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: BAND_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    }))
+}
+
+function setStageCursor(event, cursor) {
+  const container = event?.target?.getStage?.()?.container?.()
+
+  if (container) {
+    container.style.cursor = cursor
+  }
+}
+
+function setBandResizeCursor(event) {
+  setStageCursor(event, 'row-resize')
+}
+
+function clearBandResizeCursor(event) {
+  if (bandResizeDrag.value || event?.target?.isDragging?.()) return
+
+  setStageCursor(event, '')
+}
+
+function stopBandResizeEvent(event) {
+  if (!event) return
+
+  event.cancelBubble = true
+  event.evt?.preventDefault?.()
+  event.evt?.stopPropagation?.()
+}
+
+function resetBandResizeHandleNodePosition(node, bandId) {
+  const band = getBandById(bandId)
+  const segment = band ? getBandSegmentForPageIndex(band, activePageIndex.value) : null
+
+  if (!node || !segment) return
+
+  node.x(segment.x)
+  node.y(getBandResizeHandleY(segment))
+}
+
+function handleBandResizePointerDown(event, handle) {
+  const band = getBandById(handle?.bandId)
+
+  if (!band) return
+
+  stopBandResizeEvent(event)
+  setBandResizeCursor(event)
+
+  if (editingId.value) finishTextEditing()
+  if (editingTableCell.value) finishTableCellEditing()
+  if (contextMenu.value.visible) hideContextMenu()
+
+  selectBand(band.id)
+}
+
+function startBandResizeDrag(event, handle) {
+  const band = getBandById(handle?.bandId)
+  const segment = band ? getBandSegmentForPageIndex(band, activePageIndex.value) : null
+  const point = getStagePointerPosition(event)
+
+  if (!band || !segment || !point) return
+
+  handleBandResizePointerDown(event, handle)
+
+  bandResizeDrag.value = {
+    bandId: band.id,
+    startY: point.y,
+    startHeight: getBandHeight(band),
+    direction: getBandResizeDirection(segment),
+    maxHeight: getBandResizeMaxHeight(segment)
+  }
+
+  resetBandResizeHandleNodePosition(event.target, band.id)
+}
+
+function resizeBandFromHandleDrag(event, handle) {
+  const dragState = bandResizeDrag.value
+  const band = getBandById(dragState?.bandId)
+  const point = getStagePointerPosition(event)
+
+  if (!dragState || !band || !point) return
+
+  stopBandResizeEvent(event)
+  setBandResizeCursor(event)
+
+  const delta = point.y - dragState.startY
+  const nextHeight = clampNumber(
+    dragState.startHeight + delta * dragState.direction,
+    12,
+    dragState.maxHeight
+  )
+
+  updateBandHeight(band, nextHeight)
+  resetBandResizeHandleNodePosition(event.target, band.id)
+  event.target?.getLayer?.()?.batchDraw?.()
+}
+
+function finishBandResizeDrag(event, handle) {
+  const bandId = bandResizeDrag.value?.bandId || handle?.bandId
+
+  stopBandResizeEvent(event)
+  resetBandResizeHandleNodePosition(event?.target, bandId)
+  bandResizeDrag.value = null
+  setStageCursor(event, '')
+  syncRepeatedBandElements()
+}
+
+function isBandSyncedAcrossPages(band) {
+  if (!band) return false
+
+  const type = getNormalizedBandType(band.type)
+  const scope = getBandTypeOption(type)?.scope
+
+  return [
+    'every-page',
+    'over-content',
+    'under-content'
+  ].includes(scope)
+}
+
+function getBandById(bandId) {
+  const id = String(bandId || '')
+
+  return bands.value.find(band => String(band.id) === id) || null
+}
+
+function getBandSegmentForPageIndex(band, pageIndex) {
+  return getBandGuideSegments(pageIndex, { includeDuringExport: true })
+    .find(segment => String(segment.band?.id) === String(band?.id)) || null
+}
+
+function getBandTargetPageIndexes(band) {
+  return pages.value
+    .map((page, index) => (isBandVisibleOnPage(band, index, pages.value.length) ? index : -1))
+    .filter(index => index >= 0)
+}
+
+function getPageElementInfo(item) {
+  const itemId = String(item?.id)
+
+  for (let pageIndex = 0; pageIndex < pages.value.length; pageIndex += 1) {
+    const page = pages.value[pageIndex]
+    const elementIndex = Array.isArray(page?.elements)
+      ? page.elements.findIndex(element => String(element?.id) === itemId)
+      : -1
+
+    if (elementIndex >= 0) {
+      return {
+        page,
+        pageIndex,
+        elementIndex
+      }
+    }
+  }
+
+  return null
+}
+
+function getBandMasterId(item) {
+  return String(item?.bandMasterId || item?.id || '')
+}
+
+function clearRepeatedBandElementMetadata(item) {
+  if (!item || typeof item !== 'object') return
+
+  delete item.bandMasterId
+  delete item.bandMasterPageId
+  delete item.bandSyncedClone
+  delete item.bandOffsetX
+  delete item.bandOffsetY
+}
+
+function ensureRepeatedBandMasterMetadata(item, page, sourceSegment = null) {
+  if (!item || !page) return
+
+  item.bandMasterId = String(item.id)
+  item.bandMasterPageId = String(page.id)
+  item.bandSyncedClone = false
+
+  if (sourceSegment) {
+    item.bandOffsetX = getItemCoordinate(item, 'x') - sourceSegment.x
+    item.bandOffsetY = getItemCoordinate(item, 'y') - sourceSegment.y
+  }
+}
+
+function getRepeatedBandCloneKey(pageId, masterId) {
+  return `${pageId}::${masterId}`
+}
+
+function getRepeatedBandSourceOffset(master, sourceSegment) {
+  return {
+    x: getItemCoordinate(master, 'x') - sourceSegment.x,
+    y: getItemCoordinate(master, 'y') - sourceSegment.y
+  }
+}
+
+function createRepeatedBandClone(master, band, sourcePage, sourceSegment, targetPage, targetSegment, usedIds, existingId = null) {
+  const sourceOffset = getRepeatedBandSourceOffset(master, sourceSegment)
+  const clone = cloneCanvasItem(master)
+
+  assignClonedCanvasItemIds(clone, usedIds)
+
+  if (existingId !== null && existingId !== undefined) {
+    clone.id = existingId
+  }
+
+  clone.x = targetSegment.x + sourceOffset.x
+  clone.y = targetSegment.y + sourceOffset.y
+  clone.bandId = band.id
+  clone.bandMasterId = String(master.id)
+  clone.bandMasterPageId = String(sourcePage.id)
+  clone.bandSyncedClone = true
+  clone.bandOffsetX = sourceOffset.x
+  clone.bandOffsetY = sourceOffset.y
+
+  ensureSelectableItemSettings(clone)
+
+  return clone
+}
+
+function getRepeatedBandMasterEntries() {
+  const entries = []
+
+  pages.value.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      if (!item || item.bandSyncedClone) return
+
+      const band = getBandById(item.bandId)
+
+      if (!isBandSyncedAcrossPages(band)) return
+
+      const sourceSegment = getBandSegmentForPageIndex(band, pageIndex)
+
+      if (!sourceSegment) return
+
+      ensureRepeatedBandMasterMetadata(item, page, sourceSegment)
+
+      entries.push({
+        item,
+        band,
+        page,
+        pageIndex,
+        sourceSegment
+      })
+    })
+  })
+
+  return entries
+}
+
+function syncRepeatedBandMasterEntry(entry, expectedCloneKeys, usedIds) {
+  const targetPageIndexes = getBandTargetPageIndexes(entry.band)
+
+  targetPageIndexes.forEach(pageIndex => {
+    const targetPage = pages.value[pageIndex]
+
+    if (!targetPage || targetPage.id === entry.page.id) return
+
+    const targetSegment = getBandSegmentForPageIndex(entry.band, pageIndex)
+
+    if (!targetSegment) return
+
+    const cloneKey = getRepeatedBandCloneKey(targetPage.id, entry.item.id)
+    const elementsList = Array.isArray(targetPage.elements) ? targetPage.elements : []
+    const existingCloneIndex = elementsList.findIndex(item => (
+      item?.bandSyncedClone &&
+      String(item.bandMasterId) === String(entry.item.id)
+    ))
+    const existingClone = existingCloneIndex >= 0 ? elementsList[existingCloneIndex] : null
+    const clone = createRepeatedBandClone(
+      entry.item,
+      entry.band,
+      entry.page,
+      entry.sourceSegment,
+      targetPage,
+      targetSegment,
+      usedIds,
+      existingClone?.id ?? null
+    )
+
+    expectedCloneKeys.add(cloneKey)
+
+    if (existingCloneIndex >= 0) {
+      elementsList.splice(existingCloneIndex, 1, clone)
+    } else {
+      elementsList.push(clone)
+    }
+
+    targetPage.elements = elementsList
+  })
+}
+
+function removeStaleRepeatedBandClones(expectedCloneKeys) {
+  pages.value.forEach(page => {
+    if (!Array.isArray(page?.elements)) return
+
+    const seenCloneKeys = new Set()
+
+    page.elements = page.elements.filter(item => {
+      if (!item?.bandSyncedClone) return true
+
+      const cloneKey = getRepeatedBandCloneKey(page.id, getBandMasterId(item))
+
+      if (!expectedCloneKeys.has(cloneKey) || seenCloneKeys.has(cloneKey)) return false
+
+      seenCloneKeys.add(cloneKey)
+      return true
+    })
+  })
+}
+
+function syncRepeatedBandElements() {
+  if (isSyncingRepeatedBandElements) return
+
+  isSyncingRepeatedBandElements = true
+
+  try {
+    const entries = getRepeatedBandMasterEntries()
+    const expectedCloneKeys = new Set()
+    const usedIds = collectCanvasItemIds(getAllPageElements())
+
+    entries.forEach(entry => syncRepeatedBandMasterEntry(entry, expectedCloneKeys, usedIds))
+    removeStaleRepeatedBandClones(expectedCloneKeys)
+  } finally {
+    isSyncingRepeatedBandElements = false
+  }
+}
+
+function syncRepeatedBandElement(item) {
+  const band = getBandById(item?.bandId)
+
+  if (!isBandSyncedAcrossPages(band)) return
+
+  syncRepeatedBandElements()
+}
+
+function promoteRepeatedBandMastersFromPage(deletedPage) {
+  if (!deletedPage || !Array.isArray(deletedPage.elements)) return
+
+  deletedPage.elements.forEach(item => {
+    if (!item || item.bandSyncedClone) return
+
+    const band = getBandById(item.bandId)
+
+    if (!isBandSyncedAcrossPages(band)) return
+
+    const masterId = String(item.id)
+    const replacement = pages.value
+      .filter(page => page && page.id !== deletedPage.id)
+      .flatMap(page => (Array.isArray(page.elements) ? page.elements : []).map(element => ({ page, element })))
+      .find(({ element }) => (
+        element?.bandSyncedClone &&
+        String(element.bandMasterId) === masterId
+      ))
+
+    if (!replacement) return
+
+    replacement.element.bandSyncedClone = false
+    replacement.element.bandMasterId = String(replacement.element.id)
+    replacement.element.bandMasterPageId = String(replacement.page.id)
+  })
 }
 
 // Table elements (rects and text) handled separately to keep positioning group-logical
@@ -4654,7 +5562,15 @@ function ensureTemplateVariableSettings(item) {
   item.templateVariable = String(item.templateVariable || '').trim()
 }
 
+function ensureElementBandSettings(item) {
+  if (!item || typeof item !== 'object') return
+  if (item.bandId === undefined) item.bandId = ''
+
+  item.bandId = String(item.bandId || '').trim()
+}
+
 function ensureSelectableItemSettings(item) {
+  ensureElementBandSettings(item)
   ensureTemplateVariableSettings(item)
   ensureImageSettings(item)
   ensureTextSettings(item)
@@ -5563,7 +6479,9 @@ function updatePosition(e, id) {
   el.x = e.target.x()
   el.y = e.target.y()
 
-  removeElementIfOutsideCanvas(e.target, id)
+  if (!removeElementIfOutsideCanvas(e.target, id)) {
+    syncRepeatedBandElement(el)
+  }
 }
 
 function updatePositionDuringDrag(e, id) {
@@ -5603,6 +6521,8 @@ function updateTransform(e, id) {
       renderRichText(el, el.richText, el.width, el.height)
     }
 
+    syncRepeatedBandElement(el)
+
     return
   }
 
@@ -5636,7 +6556,9 @@ function updateTransform(e, id) {
 
   el.x = node.x()
   el.y = node.y()
-  removeElementIfOutsideCanvas(node, id)
+  if (!removeElementIfOutsideCanvas(node, id)) {
+    syncRepeatedBandElement(el)
+  }
 }
 
 const runtimeLayoutKeys = new Set([
@@ -6078,6 +7000,8 @@ function downloadBlobFile(blob, fileName) {
 }
 
 async function getCurrentLayoutPdfBlob() {
+  syncRepeatedBandElements()
+
   const stage = getStageNode()
 
   if (!stage) {
@@ -6268,6 +7192,7 @@ async function serializeCanvasPage(page, index, options = {}) {
 async function createLayoutExportData(options = {}) {
   syncActiveTextEditForLayoutExport()
   syncActiveTableCellEditForLayoutExport()
+  syncRepeatedBandElements()
 
   const serializedPages = await Promise.all(
     pages.value.map((page, index) => serializeCanvasPage(page, index, options))
@@ -6283,8 +7208,10 @@ async function createLayoutExportData(options = {}) {
     imageMode: options.imageMode || 'url',
     exportedAt: new Date().toISOString(),
     activePageId: activePageId.value,
+    activeBandId: activeBandId.value,
     pageCount: serializedPages.length,
     pageNumbering: getSerializablePageNumberSettings(),
+    bands: getSerializableBands(),
     page: {
       preset: selectedPagePreset.value,
       unit: pageUnit.value,
@@ -6756,10 +7683,12 @@ async function importLayoutData(data) {
 
   applyImportedPageSettings(data?.page)
   applyImportedPageNumberSettings(data?.pageNumbering || data?.pageNumbers || data?.page?.numbering)
+  applyImportedBands(getImportedBands(data), data?.activeBandId)
   resetCanvasInteractionState()
   richRenderVersions.clear()
   pages.value = nextPages
   activePageId.value = activeImportedPage.id
+  syncRepeatedBandElements()
   canvasVersion += 1
   await nextTick()
   nextPages.forEach(page => {
@@ -6825,6 +7754,13 @@ onBeforeUnmount(() => {
     elements,
     pages,
     activePageId,
+    bands,
+    activeBandId,
+    activeBand,
+    hasBands,
+    newBandType,
+    bandTypeGroups,
+    bandTypeOptions,
     activePageIndex,
     activePage,
     activePageName,
@@ -6869,6 +7805,8 @@ onBeforeUnmount(() => {
     pageConfig,
     pageNumberConfig,
     pageMarginGuideConfig,
+    bandGuideConfigs,
+    bandResizeHandleConfigs,
     pageClipConfig,
     stageConfig,
     stageShellStyle,
@@ -6896,6 +7834,7 @@ onBeforeUnmount(() => {
     editingTableCell,
     tableCellEditorValue,
     tableResizeDrag,
+    bandResizeDrag,
     draggedSidebarElementType,
     draggedLayerId,
     dragOverLayerId,
@@ -6969,6 +7908,28 @@ onBeforeUnmount(() => {
     duplicatePage,
     deletePage,
     renamePage,
+    getBandTypeOptionsForGroup,
+    getBandTypeLabel,
+    getBandTitle,
+    getBandScopeLabel,
+    getBandPlacement,
+    getBandElementCount,
+    getBandListMeta,
+    addBand,
+    selectBand,
+    setBandType,
+    setBandHeight,
+    setBandResizeCursor,
+    clearBandResizeCursor,
+    handleBandResizePointerDown,
+    startBandResizeDrag,
+    resizeBandFromHandleDrag,
+    finishBandResizeDrag,
+    moveBand,
+    deleteBand,
+    getElementBandId,
+    setSelectedElementsBand,
+    assignSelectedElementsToActiveBand,
     tableItems,
     selectedItems,
     canDeleteSelected,

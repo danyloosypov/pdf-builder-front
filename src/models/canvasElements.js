@@ -4,7 +4,10 @@ function createId() {
 
 class CanvasElement {
   constructor(config) {
-    Object.assign(this, config)
+    Object.assign(this, {
+      bandId: '',
+      ...config
+    })
   }
 }
 
