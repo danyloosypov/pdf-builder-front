@@ -856,6 +856,7 @@ function updateBandHeight(band, value, options = {}) {
     restoreBandElementOffsetSnapshots(snapshots)
   }
 
+  constrainElementsToBandBounds(band.id)
   syncRepeatedBandElements()
 }
 
@@ -1013,6 +1014,11 @@ function setSelectedElementsBand(bandId) {
     } else {
       clearRepeatedBandElementMetadata(item)
     }
+
+    const itemInfo = getPageElementInfo(item)
+    const node = itemInfo?.pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
+
+    constrainElementToBand(item, itemInfo?.pageIndex ?? activePageIndex.value, node)
   })
 
   syncRepeatedBandElements()
@@ -1367,6 +1373,214 @@ function getBandSegmentForPageIndex(band, pageIndex) {
     .find(segment => String(segment.band?.id) === String(band?.id)) || null
 }
 
+function getElementBandSegment(item, pageIndex = activePageIndex.value) {
+  const band = getBandById(item?.bandId)
+
+  return band ? getBandSegmentForPageIndex(band, pageIndex) : null
+}
+
+function getConstraintBoundsFromSegment(segment) {
+  if (!segment) return null
+
+  return {
+    x: segment.x,
+    y: segment.y,
+    width: segment.width,
+    height: segment.height,
+    right: segment.x + segment.width,
+    bottom: segment.y + segment.height
+  }
+}
+
+function getSafeClampedPosition(value, min, max) {
+  return max < min ? min : clampNumber(value, min, max)
+}
+
+function getBandConstrainedPositionFromRect(position, rect, bounds) {
+  if (!position || !rect || !bounds) return position
+
+  const targetX = rect.width > bounds.width
+    ? bounds.x
+    : getSafeClampedPosition(rect.x, bounds.x, bounds.right - rect.width)
+  const targetY = rect.height > bounds.height
+    ? bounds.y
+    : getSafeClampedPosition(rect.y, bounds.y, bounds.bottom - rect.height)
+
+  return {
+    x: position.x + targetX - rect.x,
+    y: position.y + targetY - rect.y
+  }
+}
+
+function getFallbackElementRectForPosition(item, position) {
+  const dimensions = getFallbackElementPixelDimensions(item) || { width: 1, height: 1 }
+  let x = Number(position?.x) || 0
+  let y = Number(position?.y) || 0
+
+  if (item?.type === 'circle' || regularPolygonShapeTypes.includes(item?.type)) {
+    const radius = Number(item.radius) || 0
+
+    x -= radius
+    y -= radius
+  }
+
+  if (item?.type === 'line' || item?.type === 'arrow') {
+    const bounds = getLineLocalBounds(item)
+
+    x += bounds.minX
+    y += bounds.minY
+  }
+
+  return {
+    x,
+    y,
+    width: Math.max(1, Number(dimensions.width) || 1),
+    height: Math.max(1, Number(dimensions.height) || 1)
+  }
+}
+
+function getBandConstrainedDragPosition(item, position) {
+  const segment = getElementBandSegment(item)
+  const bounds = getConstraintBoundsFromSegment(segment)
+
+  if (!bounds) return position
+
+  const node = nodeRefs.value[item?.id]
+
+  if (node?.getClientRect) {
+    const currentRect = node.getClientRect()
+    const deltaX = Number(position?.x) - Number(node.x?.() || 0)
+    const deltaY = Number(position?.y) - Number(node.y?.() || 0)
+
+    return getBandConstrainedPositionFromRect(
+      position,
+      {
+        x: currentRect.x + deltaX,
+        y: currentRect.y + deltaY,
+        width: currentRect.width,
+        height: currentRect.height
+      },
+      bounds
+    )
+  }
+
+  return getBandConstrainedPositionFromRect(
+    position,
+    getFallbackElementRectForPosition(item, position),
+    bounds
+  )
+}
+
+function getElementDragConstraintConfig(item) {
+  if (!getBandById(item?.bandId)) return {}
+
+  return {
+    dragBoundFunc: position => getBandConstrainedDragPosition(item, position)
+  }
+}
+
+function constrainElementSizeToSegment(item, segment, node = null) {
+  if (!segment || getBandPlacement(segment.band) === 'full') return
+
+  const maxWidth = Math.max(1, segment.width)
+  const maxHeight = Math.max(1, segment.height)
+
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group'].includes(item?.type)) {
+    item.width = Math.min(Math.max(1, Number(item.width) || 1), maxWidth)
+    item.height = Math.min(Math.max(1, Number(item.height) || 1), maxHeight)
+    node?.width?.(item.width)
+    node?.height?.(item.height)
+    return
+  }
+
+  if (item?.type === 'circle' || regularPolygonShapeTypes.includes(item?.type)) {
+    item.radius = Math.min(Math.max(1, Number(item.radius) || 1), maxWidth / 2, maxHeight / 2)
+    node?.radius?.(item.radius)
+  }
+}
+
+function constrainElementSizeToBand(item, node = null) {
+  constrainElementSizeToSegment(item, getElementBandSegment(item), node)
+}
+
+function updateElementBandOffsetMetadata(item, pageIndex = activePageIndex.value) {
+  const segment = getElementBandSegment(item, pageIndex)
+
+  if (!item?.bandId || !segment) return
+
+  item.bandOffsetX = getItemCoordinate(item, 'x') - segment.x
+  item.bandOffsetY = getItemCoordinate(item, 'y') - segment.y
+}
+
+function constrainElementPositionToBand(item, node = null) {
+  if (!item) return
+
+  const itemInfo = getPageElementInfo(item)
+  const pageIndex = itemInfo?.pageIndex ?? activePageIndex.value
+  const segment = getElementBandSegment(item, pageIndex)
+  const bounds = getConstraintBoundsFromSegment(segment)
+  const position = {
+    x: getItemCoordinate(item, 'x'),
+    y: getItemCoordinate(item, 'y')
+  }
+  const constrainedPosition = node?.getClientRect && pageIndex === activePageIndex.value
+    ? getBandConstrainedDragPosition(item, position)
+    : getBandConstrainedPositionFromRect(
+      position,
+      getFallbackElementRectForPosition(item, position),
+      bounds
+    )
+
+  item.x = constrainedPosition.x
+  item.y = constrainedPosition.y
+  node?.x?.(item.x)
+  node?.y?.(item.y)
+  updateElementBandOffsetMetadata(item, pageIndex)
+}
+
+function constrainElementToBand(item, pageIndex = activePageIndex.value, node = null) {
+  const segment = getElementBandSegment(item, pageIndex)
+
+  if (!segment) return
+
+  constrainElementSizeToSegment(item, segment, node)
+
+  const position = {
+    x: getItemCoordinate(item, 'x'),
+    y: getItemCoordinate(item, 'y')
+  }
+  const constrainedPosition = node?.getClientRect && pageIndex === activePageIndex.value
+    ? getBandConstrainedDragPosition(item, position)
+    : getBandConstrainedPositionFromRect(
+      position,
+      getFallbackElementRectForPosition(item, position),
+      getConstraintBoundsFromSegment(segment)
+    )
+
+  item.x = constrainedPosition.x
+  item.y = constrainedPosition.y
+  node?.x?.(item.x)
+  node?.y?.(item.y)
+  updateElementBandOffsetMetadata(item, pageIndex)
+}
+
+function constrainElementsToBandBounds(bandId = '') {
+  const targetBandId = String(bandId || '')
+
+  pages.value.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      if (!item?.bandId) return
+      if (targetBandId && String(item.bandId) !== targetBandId) return
+
+      const node = pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
+
+      constrainElementToBand(item, pageIndex, node)
+    })
+  })
+}
+
 function getBandTargetPageIndexes(band) {
   return pages.value
     .map((page, index) => (isBandVisibleOnPage(band, index, pages.value.length) ? index : -1))
@@ -1561,6 +1775,7 @@ function syncRepeatedBandElements() {
 
     entries.forEach(entry => syncRepeatedBandMasterEntry(entry, expectedCloneKeys, usedIds))
     removeStaleRepeatedBandClones(expectedCloneKeys)
+    constrainElementsToBandBounds()
   } finally {
     isSyncingRepeatedBandElements = false
   }
@@ -2348,7 +2563,8 @@ function getTableConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false
+    draggable: item.draggable !== false,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -3430,7 +3646,8 @@ function getGroupConfig(item) {
     x: item.x,
     y: item.y,
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false
+    draggable: item.draggable !== false,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -3833,6 +4050,8 @@ function setElementRotation(item, value) {
   if (!canEditElementRotation(item)) return
 
   item.rotation = normalizeElementRotation(value, item.rotation || 0)
+  constrainElementPositionToBand(item, nodeRefs.value[item.id])
+  syncRepeatedBandElement(item)
   updateTransformerSelection()
 }
 
@@ -3879,6 +4098,9 @@ function setEditableElementDimension(item, dimension, value) {
     resizeLineElementDimension(item, dimension, targetValue)
   }
 
+  constrainElementSizeToBand(item, nodeRefs.value[item.id])
+  constrainElementPositionToBand(item, nodeRefs.value[item.id])
+  syncRepeatedBandElement(item)
   updateTransformerSelection()
 }
 
@@ -3974,7 +4196,8 @@ function getTextConfig(item) {
     fontSize: item.fontSize ?? defaultTextSettings.fontSize,
     lineHeight: item.lineHeight ?? defaultTextSettings.lineHeight,
     letterSpacing: item.letterSpacing ?? defaultTextSettings.letterSpacing,
-    visible: item.id !== editingId.value
+    visible: item.id !== editingId.value,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -3997,7 +4220,8 @@ function getRectConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.rect,
     cornerRadius: getCornerRadiusConfig(item),
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4008,7 +4232,8 @@ function getCircleConfig(item) {
     strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.circle,
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4019,7 +4244,8 @@ function getRegularPolygonConfig(item) {
     strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills[item.type],
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4041,7 +4267,8 @@ function getRightTriangleConfig(item) {
     lineJoin: 'round',
     rotation: item.rotation || 0,
     draggable: item.draggable !== false,
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4055,7 +4282,8 @@ function getLineConfig(item) {
     lineJoin: item.lineJoin ?? 'round',
     hitStrokeWidth: item.hitStrokeWidth ?? Math.max(defaultLineHitStrokeWidth, item.strokeWidth || 0),
     draggable: item.draggable !== false,
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4068,7 +4296,8 @@ function getArrowConfig(item) {
     lineCap: item.lineCap ?? 'round',
     lineJoin: item.lineJoin ?? 'round',
     draggable: item.draggable !== false,
-    ...getShapeBorderConfig(item)
+    ...getShapeBorderConfig(item),
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4081,7 +4310,8 @@ function getRichTextImageConfig(item) {
     rotation: item.rotation || 0,
     draggable: item.draggable,
     image: item.richImage,
-    visible: item.id !== editingId.value
+    visible: item.id !== editingId.value,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4092,7 +4322,8 @@ function getImageBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable
+    draggable: item.draggable,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4120,7 +4351,8 @@ function getLabelConfig(item) {
     y: item.y,
     draggable: item.draggable,
     rotation: item.rotation || 0,
-    opacity: item.opacity ?? 1
+    opacity: item.opacity ?? 1,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4244,7 +4476,8 @@ function getChartBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable
+    draggable: item.draggable,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -4584,7 +4817,8 @@ function getPieChartBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable
+    draggable: item.draggable,
+    ...getElementDragConstraintConfig(item)
   }
 }
 
@@ -6297,16 +6531,24 @@ function finishTextEditing() {
   } else {
     item.width = width
     item.height = height
+    constrainElementSizeToBand(item, nodeRefs.value[item.id])
+    constrainElementPositionToBand(item, nodeRefs.value[item.id])
   }
 
   editingId.value = null
   editingTextTarget.value = 'text'
 
   if (target === 'shape') {
-    return renderShapeRichText(item, html, width, height)
+    return renderShapeRichText(item, html, width, height).then(result => {
+      syncRepeatedBandElement(item)
+      return result
+    })
   }
 
-  return renderRichText(item, html, width, height)
+  return renderRichText(item, html, item.width, item.height).then(result => {
+    syncRepeatedBandElement(item)
+    return result
+  })
 }
 
 function renderShapeRichText(item, html, width, height) {
@@ -6478,6 +6720,7 @@ function updatePosition(e, id) {
 
   el.x = e.target.x()
   el.y = e.target.y()
+  constrainElementPositionToBand(el, e.target)
 
   if (!removeElementIfOutsideCanvas(e.target, id)) {
     syncRepeatedBandElement(el)
@@ -6490,6 +6733,7 @@ function updatePositionDuringDrag(e, id) {
 
   el.x = e.target.x()
   el.y = e.target.y()
+  constrainElementPositionToBand(el, e.target)
 }
 
 /* -------------------------
@@ -6514,6 +6758,8 @@ function updateTransform(e, id) {
     node.scaleY(1)
     el.x = node.x()
     el.y = node.y()
+    constrainElementSizeToBand(el, node)
+    constrainElementPositionToBand(el, node)
 
     if (removeElementIfOutsideCanvas(node, id)) return
 
@@ -6556,6 +6802,8 @@ function updateTransform(e, id) {
 
   el.x = node.x()
   el.y = node.y()
+  constrainElementSizeToBand(el, node)
+  constrainElementPositionToBand(el, node)
   if (!removeElementIfOutsideCanvas(node, id)) {
     syncRepeatedBandElement(el)
   }
