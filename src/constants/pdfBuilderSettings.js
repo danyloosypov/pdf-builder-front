@@ -107,6 +107,7 @@ export const defaultTableCellSettings = {
   fontSize: 14,
   textAlign: 'left',
   verticalAlign: 'middle',
+  textOrientation: 'horizontal',
   borderColor: '#111827',
   borderWidth: 1,
   borderStyle: 'solid'

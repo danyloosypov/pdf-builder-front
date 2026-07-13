@@ -563,6 +563,8 @@ const DEFAULT_LINK_TEXT_COLOR = '#2563eb'
 const linkUrlInput = ref('')
 const TABLE_RESIZE_MIN_TRACK_SIZE = 16
 const TABLE_RESIZE_HANDLE_HIT_SIZE = 12
+const TABLE_HORIZONTAL_RESIZE_TYPES = new Set(['column', 'table-left', 'table-right'])
+const TABLE_OUTER_RESIZE_TYPES = new Set(['table-left', 'table-right', 'table-top', 'table-bottom'])
 const BAND_RESIZE_HANDLE_HIT_SIZE = 12
 
 const RichTextStyle = createRichTextStyleExtension({
@@ -2406,6 +2408,10 @@ function createDefaultTableCells(tableId, rows, cols) {
   return cells
 }
 
+function getNormalizedTableCellTextOrientation(value) {
+  return String(value || '').trim() === 'vertical' ? 'vertical' : 'horizontal'
+}
+
 function ensureTableCellSettings(cell, tableId) {
   const coordinates = getTableCellCoordinates(cell)
 
@@ -2426,6 +2432,7 @@ function ensureTableCellSettings(cell, tableId) {
     fontSize: Math.max(6, Math.round(Number(cell.fontSize) || defaultTableCellSettings.fontSize)),
     textAlign: ['left', 'center', 'right'].includes(cell.textAlign) ? cell.textAlign : defaultTableCellSettings.textAlign,
     verticalAlign: ['top', 'middle', 'bottom'].includes(cell.verticalAlign) ? cell.verticalAlign : defaultTableCellSettings.verticalAlign,
+    textOrientation: getNormalizedTableCellTextOrientation(cell.textOrientation),
     borderColor: getHexColor(cell.borderColor, defaultTableCellSettings.borderColor),
     borderWidth: getBorderWidthValue(cell.borderWidth ?? defaultTableCellSettings.borderWidth),
     borderStyle: getShapeBorderStyle(cell.borderStyle || defaultTableCellSettings.borderStyle)
@@ -2591,21 +2598,45 @@ function getTableCellRectConfig(table, cell) {
   }
 }
 
+function getVerticalTableCellTextAlign(cell) {
+  const verticalAlign = cell.verticalAlign || defaultTableCellSettings.verticalAlign
+
+  if (verticalAlign === 'top') return 'right'
+  if (verticalAlign === 'middle') return 'center'
+
+  return 'left'
+}
+
+function getVerticalTableCellVerticalAlign(cell) {
+  const textAlign = cell.textAlign || defaultTableCellSettings.textAlign
+
+  if (textAlign === 'right') return 'bottom'
+  if (textAlign === 'center') return 'middle'
+
+  return 'top'
+}
+
 function getTableCellTextConfig(table, cell) {
   const layout = getTableCellLayout(table, cell)
+  const isVertical = getNormalizedTableCellTextOrientation(cell.textOrientation) === 'vertical'
 
   return {
     x: 0,
-    y: 0,
-    width: layout.width,
-    height: layout.height,
+    y: isVertical ? layout.height : 0,
+    width: isVertical ? layout.height : layout.width,
+    height: isVertical ? layout.width : layout.height,
+    rotation: isVertical ? -90 : 0,
     text: String(cell.text || ''),
     fill: cell.textColor || defaultTableCellSettings.textColor,
     fontSize: cell.fontSize || defaultTableCellSettings.fontSize,
     fontFamily: 'Arial, sans-serif',
     padding: 6,
-    align: cell.textAlign || defaultTableCellSettings.textAlign,
-    verticalAlign: cell.verticalAlign || defaultTableCellSettings.verticalAlign,
+    align: isVertical
+      ? getVerticalTableCellTextAlign(cell)
+      : cell.textAlign || defaultTableCellSettings.textAlign,
+    verticalAlign: isVertical
+      ? getVerticalTableCellVerticalAlign(cell)
+      : cell.verticalAlign || defaultTableCellSettings.verticalAlign,
     listening: false
   }
 }
@@ -2731,10 +2762,73 @@ function getTableResizeHandleConfigs(table) {
     })
   }
 
+  handles.push(
+    {
+      id: `${table.id}-resize-table-left`,
+      resizeType: 'table-left',
+      index: 0,
+      x: 0,
+      y: 0,
+      points: [0, 0, 0, table.height],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    },
+    {
+      id: `${table.id}-resize-table-right`,
+      resizeType: 'table-right',
+      index: 0,
+      x: table.width,
+      y: 0,
+      points: [0, 0, 0, table.height],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    },
+    {
+      id: `${table.id}-resize-table-top`,
+      resizeType: 'table-top',
+      index: 0,
+      x: 0,
+      y: 0,
+      points: [0, 0, table.width, 0],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    },
+    {
+      id: `${table.id}-resize-table-bottom`,
+      resizeType: 'table-bottom',
+      index: 0,
+      x: 0,
+      y: table.height,
+      points: [0, 0, table.width, 0],
+      stroke: 'rgba(37,99,235,0.001)',
+      strokeWidth: 1,
+      hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
+      draggable: true,
+      listening: true,
+      perfectDrawEnabled: false
+    }
+  )
+
   return handles
 }
 
 function getTableResizeHandleOffset(table, resizeType, index) {
+  if (resizeType === 'table-right') return table.width
+  if (resizeType === 'table-bottom') return table.height
+  if (resizeType === 'table-left' || resizeType === 'table-top') return 0
+
   const sizes = resizeType === 'column'
     ? getTableColumnWidths(table)
     : getTableRowHeights(table)
@@ -2747,7 +2841,7 @@ function resetTableResizeHandleNodePosition(node, table, resizeType, index) {
 
   const offset = getTableResizeHandleOffset(table, resizeType, index)
 
-  if (resizeType === 'column') {
+  if (TABLE_HORIZONTAL_RESIZE_TYPES.has(resizeType)) {
     node.x(offset)
     node.y(0)
   } else {
@@ -2772,6 +2866,23 @@ function getTableLocalPointerPosition(table, event) {
   }
 }
 
+function getTableLocalPointerPositionFromDragState(event, dragState) {
+  const point = getStagePointerPosition(event)
+
+  if (!point || !dragState) return null
+
+  const rotation = -(Number(dragState.rotation) || 0) * Math.PI / 180
+  const cos = Math.cos(rotation)
+  const sin = Math.sin(rotation)
+  const dx = point.x - (Number(dragState.x) || 0)
+  const dy = point.y - (Number(dragState.y) || 0)
+
+  return {
+    x: dx * cos - dy * sin,
+    y: dx * sin + dy * cos
+  }
+}
+
 function getResizedAdjacentTrackSizes(sizes, index, delta) {
   const previousIndex = index - 1
   const nextIndex = index
@@ -2786,6 +2897,123 @@ function getResizedAdjacentTrackSizes(sizes, index, delta) {
   nextSizes[nextIndex] = nextSize - clampedDelta
 
   return nextSizes
+}
+
+function getTableResizeAxis(resizeType) {
+  return TABLE_HORIZONTAL_RESIZE_TYPES.has(resizeType) ? 'x' : 'y'
+}
+
+function getTableResizePointerOffset(point, resizeType) {
+  return getTableResizeAxis(resizeType) === 'x' ? point?.x : point?.y
+}
+
+function getMinimumTableWidth(table) {
+  return Math.max(1, (Number(table?.cols) || 1) * TABLE_RESIZE_MIN_TRACK_SIZE)
+}
+
+function getMinimumTableHeight(table) {
+  return Math.max(1, (Number(table?.rows) || 1) * TABLE_RESIZE_MIN_TRACK_SIZE)
+}
+
+function getTableTrackSizesForTotal(sourceSizes, count, total, defaultSize) {
+  const safeCount = Math.max(1, Math.round(Number(count) || 1))
+  const minTotal = safeCount * TABLE_RESIZE_MIN_TRACK_SIZE
+  const targetTotal = Math.max(minTotal, Number(total) || safeCount * defaultSize)
+  const fallbackSize = targetTotal / safeCount
+  const source = Array.from({ length: safeCount }, (_, index) => (
+    Math.max(1, Number(sourceSizes?.[index]) || fallbackSize)
+  ))
+  const sourceTotal = source.reduce((sum, size) => sum + size, 0)
+  let sizes = sourceTotal > 0
+    ? source.map(size => (size / sourceTotal) * targetTotal)
+    : Array.from({ length: safeCount }, () => fallbackSize)
+
+  sizes = sizes.map(size => Math.max(TABLE_RESIZE_MIN_TRACK_SIZE, size))
+
+  const totalAfterMinimum = sizes.reduce((sum, size) => sum + size, 0)
+  const overflow = totalAfterMinimum - targetTotal
+
+  if (overflow > 0.001) {
+    const shrinkCapacity = sizes.reduce((sum, size) => (
+      sum + Math.max(0, size - TABLE_RESIZE_MIN_TRACK_SIZE)
+    ), 0)
+
+    if (shrinkCapacity > 0) {
+      sizes = sizes.map(size => {
+        const capacity = Math.max(0, size - TABLE_RESIZE_MIN_TRACK_SIZE)
+
+        return size - (capacity / shrinkCapacity) * overflow
+      })
+    }
+  }
+
+  const finalTotal = sizes.reduce((sum, size) => sum + size, 0)
+  const adjustment = targetTotal - finalTotal
+
+  if (Math.abs(adjustment) > 0.001) {
+    const adjustableIndex = Math.max(0, sizes.length - 1)
+
+    sizes[adjustableIndex] = Math.max(
+      TABLE_RESIZE_MIN_TRACK_SIZE,
+      sizes[adjustableIndex] + adjustment
+    )
+  }
+
+  return sizes
+}
+
+function resizeTableOuterBounds(table, dragState, point) {
+  if (!TABLE_OUTER_RESIZE_TYPES.has(dragState?.resizeType)) return false
+
+  const resizeType = dragState.resizeType
+  const pointerOffset = getTableResizePointerOffset(point, resizeType)
+  const startPointerOffset = Number.isFinite(dragState.startPointerOffset)
+    ? dragState.startPointerOffset
+    : dragState.startOffset
+  const delta = pointerOffset - startPointerOffset
+  const startWidth = Number(dragState.width) || getMinimumTableWidth(table)
+  const startHeight = Number(dragState.height) || getMinimumTableHeight(table)
+  const rotation = Number(dragState.rotation) || 0
+
+  if (resizeType === 'table-left' || resizeType === 'table-right') {
+    const minWidth = getMinimumTableWidth(table)
+    const nextWidth = Math.max(minWidth, resizeType === 'table-left'
+      ? startWidth - delta
+      : startWidth + delta)
+    const originDeltaX = resizeType === 'table-left' ? startWidth - nextWidth : 0
+    const origin = getRotatedPoint(dragState.x, dragState.y, originDeltaX, 0, rotation)
+
+    table.x = origin.x
+    table.y = origin.y
+    table.width = nextWidth
+    table.colWidths = getTableTrackSizesForTotal(
+      dragState.colWidths,
+      table.cols,
+      nextWidth,
+      DEFAULT_TABLE_CELL_WIDTH
+    )
+
+    return true
+  }
+
+  const minHeight = getMinimumTableHeight(table)
+  const nextHeight = Math.max(minHeight, resizeType === 'table-top'
+    ? startHeight - delta
+    : startHeight + delta)
+  const originDeltaY = resizeType === 'table-top' ? startHeight - nextHeight : 0
+  const origin = getRotatedPoint(dragState.x, dragState.y, 0, originDeltaY, rotation)
+
+  table.x = origin.x
+  table.y = origin.y
+  table.height = nextHeight
+  table.rowHeights = getTableTrackSizesForTotal(
+    dragState.rowHeights,
+    table.rows,
+    nextHeight,
+    DEFAULT_TABLE_CELL_HEIGHT
+  )
+
+  return true
 }
 
 function handleTableResizeHandlePointerDown(event, tableId) {
@@ -2814,12 +3042,21 @@ function startTableResizeDrag(event, tableId, handle) {
 
   const resizeType = handle.resizeType
   const index = Number(handle.index)
+  const startPoint = getTableLocalPointerPosition(table, event)
+  const startOffset = getTableResizeHandleOffset(table, resizeType, index)
+  const startPointerOffset = getTableResizePointerOffset(startPoint, resizeType)
 
   tableResizeDrag.value = {
     tableId: table.id,
     resizeType,
     index,
-    startOffset: getTableResizeHandleOffset(table, resizeType, index),
+    startOffset,
+    startPointerOffset: Number.isFinite(startPointerOffset) ? startPointerOffset : startOffset,
+    x: table.x,
+    y: table.y,
+    width: table.width,
+    height: table.height,
+    rotation: table.rotation || 0,
     colWidths: [...table.colWidths],
     rowHeights: [...table.rowHeights]
   }
@@ -2838,14 +3075,25 @@ function resizeTableFromHandleDrag(event, tableId, handle) {
   event.evt?.preventDefault?.()
   event.evt?.stopPropagation?.()
 
-  const point = getTableLocalPointerPosition(table, event)
+  const point = getTableLocalPointerPositionFromDragState(event, dragState) ||
+    getTableLocalPointerPosition(table, event)
 
   if (!point) return
 
   const resizeType = dragState.resizeType
   const index = dragState.index
-  const currentOffset = resizeType === 'column' ? point.x : point.y
-  const delta = currentOffset - dragState.startOffset
+
+  if (resizeTableOuterBounds(table, dragState, point)) {
+    resetTableResizeHandleNodePosition(event.target, table, resizeType, index)
+    event.target?.getLayer?.()?.batchDraw?.()
+    return
+  }
+
+  const currentOffset = getTableResizePointerOffset(point, resizeType)
+  const startPointerOffset = Number.isFinite(dragState.startPointerOffset)
+    ? dragState.startPointerOffset
+    : dragState.startOffset
+  const delta = currentOffset - startPointerOffset
 
   if (resizeType === 'column') {
     table.colWidths = getResizedAdjacentTrackSizes(dragState.colWidths, index, delta)
@@ -2878,18 +3126,28 @@ function finishTableResizeDrag(event, tableId, handle) {
 
 function getTableCellEditorStyle(table, cell) {
   const layout = getTableCellLayout(table, cell)
-  const point = getRotatedPoint(table.x, table.y, layout.x, layout.y, table.rotation || 0)
+  const isVertical = getNormalizedTableCellTextOrientation(cell.textOrientation) === 'vertical'
+  const tableRotation = table.rotation || 0
+  const point = getRotatedPoint(
+    table.x,
+    table.y,
+    layout.x,
+    layout.y + (isVertical ? layout.height : 0),
+    tableRotation
+  )
 
   return {
     left: `${point.x}px`,
     top: `${point.y}px`,
-    width: `${Math.max(1, layout.width)}px`,
-    height: `${Math.max(1, layout.height)}px`,
+    width: `${Math.max(1, isVertical ? layout.height : layout.width)}px`,
+    height: `${Math.max(1, isVertical ? layout.width : layout.height)}px`,
     color: cell.textColor || defaultTableCellSettings.textColor,
     background: cell.fill || defaultTableCellSettings.fill,
     fontSize: `${cell.fontSize || defaultTableCellSettings.fontSize}px`,
-    textAlign: cell.textAlign || defaultTableCellSettings.textAlign,
-    transform: `rotate(${table.rotation || 0}deg)`,
+    textAlign: isVertical
+      ? getVerticalTableCellTextAlign(cell)
+      : cell.textAlign || defaultTableCellSettings.textAlign,
+    transform: `rotate(${tableRotation + (isVertical ? -90 : 0)}deg)`,
     transformOrigin: 'top left'
   }
 }
@@ -2988,6 +3246,11 @@ function setSelectedTableCellsStyle(attrs) {
         return
       }
 
+      if (key === 'textOrientation') {
+        cell.textOrientation = getNormalizedTableCellTextOrientation(value)
+        return
+      }
+
       cell[key] = value
     })
   })
@@ -3000,6 +3263,7 @@ function cloneTableCellStyle(cell) {
     fontSize: cell.fontSize,
     textAlign: cell.textAlign,
     verticalAlign: cell.verticalAlign,
+    textOrientation: cell.textOrientation,
     borderColor: cell.borderColor,
     borderWidth: cell.borderWidth,
     borderStyle: cell.borderStyle,

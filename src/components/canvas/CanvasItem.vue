@@ -91,7 +91,9 @@ function setStageCursor(event, cursor) {
 }
 
 function getTableResizeCursor(handle) {
-  return handle?.resizeType === 'column' ? 'col-resize' : 'row-resize'
+  return ['column', 'table-left', 'table-right'].includes(handle?.resizeType)
+    ? 'col-resize'
+    : 'row-resize'
 }
 
 function setTableResizeCursor(event, handle) {

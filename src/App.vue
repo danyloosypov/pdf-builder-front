@@ -992,6 +992,26 @@ export default {
             </div>
           </div>
 
+          <div class="control-row">
+            <span>Text Direction</span>
+            <div class="segmented-control">
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('textOrientation', 'horizontal') === 'horizontal' }"
+                  @click="setSelectedTableCellsStyle({ textOrientation: 'horizontal' })"
+              >
+                Horizontal
+              </button>
+              <button
+                  type="button"
+                  :class="{ active: getSelectedTableCellStyleValue('textOrientation', 'horizontal') === 'vertical' }"
+                  @click="setSelectedTableCellsStyle({ textOrientation: 'vertical' })"
+              >
+                Vertical
+              </button>
+            </div>
+          </div>
+
           <div class="chart-color-grid">
             <label>
               <span>Border</span>
