@@ -156,6 +156,50 @@ export default {
           <span>Bottom {{ currentPageMargins.bottom }} {{ pageUnit }}</span>
           <span>Left {{ currentPageMargins.left }} {{ pageUnit }}</span>
         </div>
+
+        <label class="control-row">
+          <span>Columns</span>
+          <input
+              v-model.number="pageColumnCount"
+              class="number-input"
+              type="number"
+              min="1"
+              max="12"
+              step="1"
+          >
+        </label>
+
+        <label class="checkbox-control">
+          <input v-model="applyPageColumnsToAllPages" type="checkbox">
+          <span>Apply to all pages</span>
+        </label>
+
+        <div v-if="pageColumnCount > 1" class="page-size-grid">
+          <label>
+            <span>Gap ({{ pageUnit }})</span>
+            <input
+                v-model.number="pageColumnGap"
+                type="number"
+                min="0"
+                :max="pageColumnGapMax"
+                :step="pageMarginStep"
+            >
+          </label>
+          <label>
+            <span>Width ({{ pageUnit }})</span>
+            <input
+                v-model.number="pageColumnWidth"
+                type="number"
+                :min="pageColumnWidthMin"
+                :max="pageColumnWidthMax"
+                :step="pageMarginStep"
+            >
+          </label>
+        </div>
+
+        <div class="page-size-readout">
+          <span>{{ pageColumnSummary }}</span>
+        </div>
       </div>
 
       <div class="page-list-panel">
@@ -172,6 +216,7 @@ export default {
             <span>{{ getPageTitle(page, index) }}</span>
             <small>
               {{ page.orientation === 'landscape' ? 'Landscape' : 'Portrait' }}
+              / {{ getCanvasPageColumnCount(page) }} col
               / {{ page.elements.length }} item{{ page.elements.length === 1 ? '' : 's' }}
             </small>
           </button>
@@ -1647,6 +1692,11 @@ export default {
           <v-layer>
             <v-rect :config="pageConfig" />
             <v-rect :config="pageMarginGuideConfig" />
+            <v-rect
+                v-for="guide in pageColumnGuideConfigs"
+                :key="guide.id"
+                :config="guide"
+            />
             <v-group :config="pageClipConfig">
               <v-group
                   v-for="guide in bandGuideConfigs"

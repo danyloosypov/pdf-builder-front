@@ -124,6 +124,13 @@ export function usePdfBuilder() {
 let generatedPageIdCounter = 0
 let generatedBandIdCounter = 0
 const DEFAULT_BAND_TYPE = 'page-header'
+const MIN_PAGE_COLUMN_COUNT = 1
+const MAX_PAGE_COLUMN_COUNT = 12
+const MIN_PAGE_COLUMN_WIDTH_INCHES = 0.1
+const DEFAULT_PAGE_COLUMN_SETTINGS = {
+  count: 1,
+  gapInches: 0.2
+}
 
 function createPageId() {
   generatedPageIdCounter += 1
@@ -186,11 +193,31 @@ function getNormalizedPageOrientation(value) {
   return value === 'landscape' ? 'landscape' : 'portrait'
 }
 
+function getNormalizedPageColumnCount(value) {
+  return clampNumber(
+    Math.round(Number(value) || DEFAULT_PAGE_COLUMN_SETTINGS.count),
+    MIN_PAGE_COLUMN_COUNT,
+    MAX_PAGE_COLUMN_COUNT
+  )
+}
+
+function getNormalizedPageColumnGapInches(value) {
+  return Math.max(0, Number(value) || 0)
+}
+
+function getNormalizedPageColumnSettings(settings = {}) {
+  return {
+    count: getNormalizedPageColumnCount(settings.count),
+    gapInches: getNormalizedPageColumnGapInches(settings.gapInches)
+  }
+}
+
 function createCanvasPage(name = '', options = {}) {
   return {
     id: createPageId(),
     name: name || 'Page',
     orientation: getNormalizedPageOrientation(options.orientation),
+    columns: getNormalizedPageColumnSettings(options.columns || DEFAULT_PAGE_COLUMN_SETTINGS),
     elements: []
   }
 }
@@ -259,6 +286,7 @@ const customPageMarginsInches = ref({
   bottom: 1,
   left: 1
 })
+const applyPageColumnsToAllPages = ref(false)
 const isPdfExporting = ref(false)
 const pdfExportError = ref('')
 
@@ -353,6 +381,47 @@ const currentPageMargins = computed(() => ({
   bottom: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.bottom)),
   left: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.left))
 }))
+const pageContentSizeInches = computed(() => getPageContentSizeInchesForOrientation(pageOrientation.value))
+const activePageColumnSettings = computed(() => (
+  getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation)
+))
+const pageColumnCount = computed({
+  get: () => activePageColumnSettings.value.count,
+  set: value => {
+    const count = getNormalizedPageColumnCount(value)
+    const gapInches = activePageColumnSettings.value.count <= 1 && count > 1
+      ? DEFAULT_PAGE_COLUMN_SETTINGS.gapInches
+      : activePageColumnSettings.value.gapInches
+
+    setActivePageColumnSettings({ count, gapInches })
+  }
+})
+const pageColumnGapMaxInches = computed(() => getMaxPageColumnGapInches(pageColumnCount.value))
+const pageColumnGapMax = computed(() => formatPageDimension(convertInchesToPageUnit(pageColumnGapMaxInches.value)))
+const pageColumnGap = computed({
+  get: () => formatPageDimension(convertInchesToPageUnit(activePageColumnSettings.value.gapInches)),
+  set: value => {
+    setActivePageColumnSettings({
+      gapInches: getPageColumnUnitInches(value, pageColumnGapMaxInches.value)
+    })
+  }
+})
+const pageColumnWidthInches = computed(() => getPageColumnWidthInches(activePageColumnSettings.value))
+const pageColumnWidthMin = computed(() => {
+  const maxWidth = getMaxPageColumnWidthInches(pageColumnCount.value)
+
+  return formatPageDimension(convertInchesToPageUnit(Math.min(MIN_PAGE_COLUMN_WIDTH_INCHES, maxWidth)))
+})
+const pageColumnWidthMax = computed(() => formatPageDimension(convertInchesToPageUnit(getMaxPageColumnWidthInches(pageColumnCount.value))))
+const pageColumnWidth = computed({
+  get: () => formatPageDimension(convertInchesToPageUnit(pageColumnWidthInches.value)),
+  set: value => {
+    setPageColumnWidthInches(getPageColumnUnitInches(value, getMaxPageColumnWidthInches(pageColumnCount.value)))
+  }
+})
+const pageColumnSummary = computed(() => (
+  `${pageColumnCount.value} column${pageColumnCount.value === 1 ? '' : 's'} / width ${pageColumnWidth.value} ${pageUnit.value} / gap ${pageColumnGap.value} ${pageUnit.value}`
+))
 
 function getNormalizedPageNumberPosition(value) {
   return pageNumberPositionOptions.some(option => option.value === value)
@@ -399,6 +468,147 @@ function shouldShowPageNumberForIndex(index) {
   const settings = getNormalizedPageNumberSettings(pageNumberSettings.value)
 
   return settings.enabled && !(settings.hideFirstPage && index === 0)
+}
+
+function getPageContentSizeInchesForOrientation(orientation = pageOrientation.value) {
+  const size = getPageSizeInchesForOrientation(orientation)
+
+  return {
+    width: Math.max(0.01, size.width - pageMarginsInches.value.left - pageMarginsInches.value.right),
+    height: Math.max(0.01, size.height - pageMarginsInches.value.top - pageMarginsInches.value.bottom)
+  }
+}
+
+function getMaxPageColumnGapInches(count = pageColumnCount.value, orientation = pageOrientation.value) {
+  const normalizedCount = getNormalizedPageColumnCount(count)
+
+  if (normalizedCount <= 1) return 0
+
+  const contentSize = getPageContentSizeInchesForOrientation(orientation)
+
+  return Math.max(
+    0,
+    (contentSize.width - normalizedCount * MIN_PAGE_COLUMN_WIDTH_INCHES) /
+      (normalizedCount - 1)
+  )
+}
+
+function getMaxPageColumnWidthInches(count = pageColumnCount.value, orientation = pageOrientation.value) {
+  const contentSize = getPageContentSizeInchesForOrientation(orientation)
+
+  return Math.max(0.01, contentSize.width / getNormalizedPageColumnCount(count))
+}
+
+function getClampedPageColumnSettings(settings = {}, orientation = pageOrientation.value) {
+  const normalized = getNormalizedPageColumnSettings(settings)
+  const maxGap = getMaxPageColumnGapInches(normalized.count, orientation)
+
+  return {
+    count: normalized.count,
+    gapInches: normalized.count > 1
+      ? clampNumber(normalized.gapInches, 0, maxGap)
+      : 0
+  }
+}
+
+function getPageColumnWidthInches(settings = activePageColumnSettings.value, orientation = pageOrientation.value) {
+  const normalized = getClampedPageColumnSettings(settings, orientation)
+  const gapTotal = normalized.gapInches * Math.max(0, normalized.count - 1)
+  const contentSize = getPageContentSizeInchesForOrientation(orientation)
+
+  return Math.max(0.01, (contentSize.width - gapTotal) / normalized.count)
+}
+
+function getPageColumnUnitInches(value, maxInches) {
+  const numericValue = clampNumber(value, 0, convertInchesToPageUnit(Math.max(0, maxInches)))
+
+  return pageUnit.value === 'cm'
+    ? numericValue / CM_PER_INCH
+    : numericValue
+}
+
+function setActivePageColumnSettings(attrs = {}) {
+  const page = activePage.value
+
+  if (!page) return
+
+  const nextSettings = getClampedPageColumnSettings({
+    ...activePageColumnSettings.value,
+    ...attrs
+  }, page.orientation)
+
+  if (applyPageColumnsToAllPages.value) {
+    applyPageColumnSettingsToPages(nextSettings)
+    return
+  }
+
+  page.columns = nextSettings
+}
+
+function applyPageColumnSettingsToPages(settings = activePageColumnSettings.value) {
+  pages.value.forEach(page => {
+    if (!page) return
+
+    page.columns = getClampedPageColumnSettings(settings, page.orientation)
+  })
+}
+
+function getCanvasPageColumnCount(page) {
+  return getClampedPageColumnSettings(page?.columns, page?.orientation).count
+}
+
+function setPageColumnWidthInches(value) {
+  const count = pageColumnCount.value
+
+  if (count <= 1) return
+
+  const maxWidth = getMaxPageColumnWidthInches(count)
+  const minWidth = Math.min(MIN_PAGE_COLUMN_WIDTH_INCHES, maxWidth)
+  const width = clampNumber(value, minWidth, maxWidth)
+  const gapInches = (pageContentSizeInches.value.width - width * count) / (count - 1)
+
+  setActivePageColumnSettings({ gapInches })
+}
+
+function getPageContentBoundsPixels() {
+  const margins = pageMarginsInches.value
+  const left = Math.round(margins.left * PX_PER_INCH)
+  const top = Math.round(margins.top * PX_PER_INCH)
+  const right = Math.round(margins.right * PX_PER_INCH)
+  const bottom = Math.round(margins.bottom * PX_PER_INCH)
+
+  return {
+    x: pageConfig.value.x + left,
+    y: pageConfig.value.y + top,
+    width: Math.max(1, pageConfig.value.width - left - right),
+    height: Math.max(1, pageConfig.value.height - top - bottom)
+  }
+}
+
+function getPageColumnGuideConfigs() {
+  if (isPdfExporting.value) return []
+
+  const settings = activePageColumnSettings.value
+
+  if (settings.count <= 1) return []
+
+  const bounds = getPageContentBoundsPixels()
+  const gap = Math.max(0, settings.gapInches * PX_PER_INCH)
+  const columnWidth = Math.max(1, (bounds.width - gap * (settings.count - 1)) / settings.count)
+
+  return Array.from({ length: settings.count }, (_, index) => ({
+    id: `page-column-guide-${activePageId.value}-${index}`,
+    x: bounds.x + index * (columnWidth + gap),
+    y: bounds.y,
+    width: columnWidth,
+    height: bounds.height,
+    fill: 'rgba(14,165,233,0.035)',
+    stroke: '#38bdf8',
+    strokeWidth: 1,
+    dash: [5, 5],
+    listening: false,
+    perfectDrawEnabled: false
+  }))
 }
 
 const pageConfig = computed(() => ({
@@ -461,6 +671,7 @@ const pageMarginGuideConfig = computed(() => {
     listening: false
   }
 })
+const pageColumnGuideConfigs = computed(() => getPageColumnGuideConfigs())
 const pageClipConfig = computed(() => ({
   clipX: pageConfig.value.x,
   clipY: pageConfig.value.y,
@@ -698,7 +909,8 @@ function selectPage(pageId) {
 
 function addPage() {
   const page = createCanvasPage(`Page ${pages.value.length + 1}`, {
-    orientation: pageOrientation.value
+    orientation: pageOrientation.value,
+    columns: activePageColumnSettings.value
   })
 
   pages.value.push(page)
@@ -714,7 +926,8 @@ function duplicatePage(pageId = activePageId.value) {
 
   const usedIds = collectCanvasItemIds(getAllPageElements())
   const page = createCanvasPage(`${getPageTitle(sourcePage, sourceIndex)} Copy`, {
-    orientation: sourcePage.orientation
+    orientation: sourcePage.orientation,
+    columns: sourcePage.columns
   })
 
   page.elements = sourcePage.elements.map(item => {
@@ -6515,6 +6728,11 @@ watch(selectedPageMarginPreset, (newValue, oldValue) => {
 
   customPageMarginsInches.value = presetMargins
 }, { flush: 'sync' })
+watch(applyPageColumnsToAllPages, value => {
+  if (!value) return
+
+  applyPageColumnSettingsToPages(activePageColumnSettings.value)
+}, { flush: 'sync' })
 watch(pagePixelSize, () => nextTick(removeOutsideCanvasElements))
 
 function isTargetInsideNode(target, node) {
@@ -7685,6 +7903,7 @@ async function serializeCanvasPage(page, index, options = {}) {
   const orientation = getNormalizedPageOrientation(page?.orientation)
   const sizeInches = getPageSizeInchesForOrientation(orientation)
   const sizePixels = getPagePixelSizeForOrientation(orientation)
+  const columns = getClampedPageColumnSettings(page?.columns, orientation)
   const serializedElements = await Promise.all(
     (Array.isArray(page?.elements) ? page.elements : [])
       .map(item => serializeLayoutElement(item, options))
@@ -7696,6 +7915,7 @@ async function serializeCanvasPage(page, index, options = {}) {
     orientation,
     sizeInches,
     sizePixels,
+    columns,
     elements: serializedElements,
     variables: getTemplateVariablesFromElements(serializedElements)
   }
@@ -7734,7 +7954,8 @@ async function createLayoutExportData(options = {}) {
       customSizeInches: { ...customPageSizeInches.value },
       marginPreset: selectedPageMarginPreset.value,
       marginsInches: { ...pageMarginsInches.value },
-      customMarginsInches: { ...customPageMarginsInches.value }
+      customMarginsInches: { ...customPageMarginsInches.value },
+      columns: getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation)
     },
     variables: getTemplateVariablesFromElements(allSerializedElements),
     pages: serializedPages,
@@ -7888,6 +8109,10 @@ function getImportLayoutElements(data) {
 
 function getImportLayoutPages(data) {
   const fallbackOrientation = getNormalizedPageOrientation(data?.page?.orientation)
+  const fallbackColumns = getClampedPageColumnSettings(
+    data?.page?.columns || DEFAULT_PAGE_COLUMN_SETTINGS,
+    fallbackOrientation
+  )
 
   if (Array.isArray(data?.pages)) {
     return data.pages
@@ -7896,6 +8121,10 @@ function getImportLayoutPages(data) {
         id: typeof page.id === 'string' ? page.id : '',
         name: typeof page.name === 'string' ? page.name : `Page ${index + 1}`,
         orientation: getNormalizedPageOrientation(page.orientation || fallbackOrientation),
+        columns: getClampedPageColumnSettings(
+          page.columns || fallbackColumns,
+          getNormalizedPageOrientation(page.orientation || fallbackOrientation)
+        ),
         elements: page.elements
       }))
   }
@@ -7907,6 +8136,7 @@ function getImportLayoutPages(data) {
       id: '',
       name: 'Page 1',
       orientation: fallbackOrientation,
+      columns: fallbackColumns,
       elements: layoutElements
     }]
   }
@@ -8188,6 +8418,7 @@ async function importLayoutData(data) {
       id: pageId,
       name: page.name || `Page ${index + 1}`,
       orientation: getNormalizedPageOrientation(page.orientation),
+      columns: getClampedPageColumnSettings(page.columns || DEFAULT_PAGE_COLUMN_SETTINGS, page.orientation),
       elements: importedElements.filter(Boolean)
     }
   }))
@@ -8314,9 +8545,19 @@ onBeforeUnmount(() => {
     currentPageWidth,
     currentPageHeight,
     currentPageMargins,
+    pageColumnCount,
+    pageColumnGap,
+    pageColumnGapMax,
+    pageColumnWidth,
+    pageColumnWidthMin,
+    pageColumnWidthMax,
+    pageColumnSummary,
+    applyPageColumnsToAllPages,
+    getCanvasPageColumnCount,
     pageConfig,
     pageNumberConfig,
     pageMarginGuideConfig,
+    pageColumnGuideConfigs,
     bandGuideConfigs,
     bandResizeHandleConfigs,
     pageClipConfig,
