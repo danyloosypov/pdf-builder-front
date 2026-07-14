@@ -131,6 +131,36 @@ const DEFAULT_PAGE_COLUMN_SETTINGS = {
   count: 1,
   gapInches: 0.2
 }
+const pageWatermarkTypeOptions = [
+  { value: 'text', label: 'Text' },
+  { value: 'image', label: 'Image' }
+]
+const pageWatermarkFontStyleOptions = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'bold', label: 'Bold' },
+  { value: 'italic', label: 'Italic' },
+  { value: 'bold italic', label: 'Bold italic' }
+]
+const DEFAULT_PAGE_WATERMARK_SETTINGS = {
+  enabled: false,
+  type: 'text',
+  text: 'DRAFT',
+  imageUrl: '',
+  x: 120,
+  y: 420,
+  width: 560,
+  height: 140,
+  rotation: -35,
+  opacity: 0.18,
+  repeat: false,
+  repeatGapX: 120,
+  repeatGapY: 100,
+  color: '#94a3b8',
+  fontSize: 72,
+  fontFamily: fontOptions[0].value,
+  fontStyle: 'bold'
+}
+const MAX_PAGE_WATERMARK_REPEAT_ITEMS = 500
 
 function createPageId() {
   generatedPageIdCounter += 1
@@ -212,12 +242,70 @@ function getNormalizedPageColumnSettings(settings = {}) {
   }
 }
 
+function getNormalizedPageWatermarkType(value) {
+  return pageWatermarkTypeOptions.some(option => option.value === value)
+    ? value
+    : DEFAULT_PAGE_WATERMARK_SETTINGS.type
+}
+
+function getNormalizedPageWatermarkFontFamily(value) {
+  return fontOptions.some(option => option.value === value)
+    ? value
+    : DEFAULT_PAGE_WATERMARK_SETTINGS.fontFamily
+}
+
+function getNormalizedPageWatermarkFontStyle(value) {
+  return pageWatermarkFontStyleOptions.some(option => option.value === value)
+    ? value
+    : DEFAULT_PAGE_WATERMARK_SETTINGS.fontStyle
+}
+
+function getNormalizedPageWatermarkNumber(value, fallback, min, max) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) return fallback
+
+  return clampNumber(numericValue, min, max)
+}
+
+function getNormalizedPageWatermarkSettings(settings = {}) {
+  const source = settings && typeof settings === 'object' ? settings : {}
+  const normalized = {
+    enabled: Boolean(source.enabled),
+    type: getNormalizedPageWatermarkType(source.type),
+    text: source.text === undefined ? DEFAULT_PAGE_WATERMARK_SETTINGS.text : String(source.text),
+    imageUrl: String(source.imageUrl || '').trim(),
+    x: getNormalizedPageWatermarkNumber(source.x, DEFAULT_PAGE_WATERMARK_SETTINGS.x, -5000, 5000),
+    y: getNormalizedPageWatermarkNumber(source.y, DEFAULT_PAGE_WATERMARK_SETTINGS.y, -5000, 5000),
+    width: getNormalizedPageWatermarkNumber(source.width, DEFAULT_PAGE_WATERMARK_SETTINGS.width, 8, 5000),
+    height: getNormalizedPageWatermarkNumber(source.height, DEFAULT_PAGE_WATERMARK_SETTINGS.height, 8, 5000),
+    rotation: getNormalizedPageWatermarkNumber(source.rotation, DEFAULT_PAGE_WATERMARK_SETTINGS.rotation, -360, 360),
+    opacity: getNormalizedPageWatermarkNumber(source.opacity, DEFAULT_PAGE_WATERMARK_SETTINGS.opacity, 0, 1),
+    repeat: Boolean(source.repeat),
+    repeatGapX: getNormalizedPageWatermarkNumber(source.repeatGapX, DEFAULT_PAGE_WATERMARK_SETTINGS.repeatGapX, 0, 5000),
+    repeatGapY: getNormalizedPageWatermarkNumber(source.repeatGapY, DEFAULT_PAGE_WATERMARK_SETTINGS.repeatGapY, 0, 5000),
+    color: getHexColor(source.color, DEFAULT_PAGE_WATERMARK_SETTINGS.color),
+    fontSize: getNormalizedPageWatermarkNumber(source.fontSize, DEFAULT_PAGE_WATERMARK_SETTINGS.fontSize, 6, 240),
+    fontFamily: getNormalizedPageWatermarkFontFamily(source.fontFamily),
+    fontStyle: getNormalizedPageWatermarkFontStyle(source.fontStyle)
+  }
+
+  if (source.image) normalized.image = source.image
+
+  return normalized
+}
+
+function clonePageWatermarkSettings(settings = {}) {
+  return getNormalizedPageWatermarkSettings(settings)
+}
+
 function createCanvasPage(name = '', options = {}) {
   return {
     id: createPageId(),
     name: name || 'Page',
     orientation: getNormalizedPageOrientation(options.orientation),
     columns: getNormalizedPageColumnSettings(options.columns || DEFAULT_PAGE_COLUMN_SETTINGS),
+    watermark: clonePageWatermarkSettings(options.watermark || DEFAULT_PAGE_WATERMARK_SETTINGS),
     elements: []
   }
 }
@@ -287,8 +375,10 @@ const customPageMarginsInches = ref({
   left: 1
 })
 const applyPageColumnsToAllPages = ref(false)
+const applyPageWatermarkToAllPages = ref(false)
 const isPdfExporting = ref(false)
 const pdfExportError = ref('')
+let isApplyingPageWatermarkSettings = false
 
 const pageDimensionStep = computed(() => pageUnit.value === 'cm' ? 0.1 : 0.05)
 const pageDimensionMin = computed(() => convertInchesToPageUnit(MIN_PAGE_INCHES))
@@ -422,6 +512,16 @@ const pageColumnWidth = computed({
 const pageColumnSummary = computed(() => (
   `${pageColumnCount.value} column${pageColumnCount.value === 1 ? '' : 's'} / width ${pageColumnWidth.value} ${pageUnit.value} / gap ${pageColumnGap.value} ${pageUnit.value}`
 ))
+const activePageWatermark = computed(() => {
+  const page = activePage.value
+
+  if (!page) return clonePageWatermarkSettings()
+  if (!page.watermark || typeof page.watermark !== 'object') {
+    page.watermark = clonePageWatermarkSettings()
+  }
+
+  return page.watermark
+})
 
 function getNormalizedPageNumberPosition(value) {
   return pageNumberPositionOptions.some(option => option.value === value)
@@ -557,6 +657,174 @@ function getCanvasPageColumnCount(page) {
   return getClampedPageColumnSettings(page?.columns, page?.orientation).count
 }
 
+function applyPageWatermarkSettingsToPages(settings = activePageWatermark.value) {
+  if (isApplyingPageWatermarkSettings) return
+
+  isApplyingPageWatermarkSettings = true
+
+  try {
+    const normalized = clonePageWatermarkSettings(settings)
+
+    pages.value.forEach(page => {
+      if (!page) return
+      if (page.id === activePageId.value) return
+
+      page.watermark = clonePageWatermarkSettings(normalized)
+    })
+  } finally {
+    isApplyingPageWatermarkSettings = false
+  }
+}
+
+function getPageWatermarkImageSource(settings = activePageWatermark.value) {
+  return String(settings?.imageUrl || '').trim()
+}
+
+async function loadPageWatermarkImage(page, stats = { failedImages: 0 }) {
+  const watermark = page?.watermark
+
+  if (!watermark) return null
+
+  const source = getPageWatermarkImageSource(watermark)
+
+  if (!source || watermark.type !== 'image') {
+    watermark.image = null
+    pageWatermarkImageLoadedSources.delete(watermark)
+    return null
+  }
+
+  if (watermark.image && pageWatermarkImageLoadedSources.get(watermark) === source) {
+    return watermark.image
+  }
+
+  const loadToken = `${Date.now()}-${Math.random()}`
+
+  pageWatermarkImageLoadTokens.set(watermark, loadToken)
+
+  const image = await loadImportedImage(source, stats)
+
+  if (page.watermark !== watermark || pageWatermarkImageLoadTokens.get(watermark) !== loadToken) {
+    return image
+  }
+
+  watermark.image = image
+  if (image) {
+    pageWatermarkImageLoadedSources.set(watermark, source)
+  } else {
+    pageWatermarkImageLoadedSources.delete(watermark)
+  }
+
+  return image
+}
+
+function loadActivePageWatermarkImage() {
+  return loadPageWatermarkImage(activePage.value)
+}
+
+function uploadPageWatermarkImage(event) {
+  const input = event.target
+  const file = input.files?.[0]
+  const page = activePage.value
+
+  if (!file || !page) return
+
+  const reader = new FileReader()
+
+  reader.onload = () => {
+    if (activePage.value !== page || typeof reader.result !== 'string') return
+
+    page.watermark = clonePageWatermarkSettings({
+      ...activePageWatermark.value,
+      enabled: true,
+      type: 'image',
+      imageUrl: reader.result
+    })
+    loadPageWatermarkImage(page)
+  }
+
+  reader.readAsDataURL(file)
+  input.value = ''
+}
+
+function getPageWatermarkRepeatStart(offset, step) {
+  if (step <= 0) return offset
+
+  return (((offset % step) + step) % step) - step
+}
+
+function getPageWatermarkTilePositions(settings, page) {
+  const width = Math.max(1, settings.width)
+  const height = Math.max(1, settings.height)
+
+  if (!settings.repeat) {
+    return [{ x: settings.x, y: settings.y }]
+  }
+
+  const stepX = Math.max(1, width + settings.repeatGapX)
+  const stepY = Math.max(1, height + settings.repeatGapY)
+  const startX = getPageWatermarkRepeatStart(settings.x, stepX)
+  const startY = getPageWatermarkRepeatStart(settings.y, stepY)
+  const positions = []
+
+  for (let y = startY; y < page.height + stepY && positions.length < MAX_PAGE_WATERMARK_REPEAT_ITEMS; y += stepY) {
+    for (let x = startX; x < page.width + stepX && positions.length < MAX_PAGE_WATERMARK_REPEAT_ITEMS; x += stepX) {
+      positions.push({ x, y })
+    }
+  }
+
+  return positions
+}
+
+function getPageWatermarkBaseConfig(settings, tile, index) {
+  const page = pageConfig.value
+  const width = Math.max(1, settings.width)
+  const height = Math.max(1, settings.height)
+
+  return {
+    id: `page-watermark-${activePageId.value}-${index}`,
+    x: page.x + tile.x + width / 2,
+    y: page.y + tile.y + height / 2,
+    width,
+    height,
+    offsetX: width / 2,
+    offsetY: height / 2,
+    rotation: settings.rotation,
+    opacity: settings.opacity,
+    listening: false,
+    perfectDrawEnabled: false
+  }
+}
+
+function getPageWatermarkTextConfigs() {
+  const settings = getNormalizedPageWatermarkSettings(activePageWatermark.value)
+  const text = String(settings.text || '').trim()
+
+  if (!settings.enabled || settings.type !== 'text' || !text) return []
+
+  return getPageWatermarkTilePositions(settings, pageConfig.value).map((tile, index) => ({
+    ...getPageWatermarkBaseConfig(settings, tile, index),
+    text,
+    fill: settings.color,
+    fontSize: settings.fontSize,
+    fontFamily: settings.fontFamily,
+    fontStyle: settings.fontStyle,
+    lineHeight: 1.2,
+    align: 'center',
+    verticalAlign: 'middle'
+  }))
+}
+
+function getPageWatermarkImageConfigs() {
+  const settings = getNormalizedPageWatermarkSettings(activePageWatermark.value)
+
+  if (!settings.enabled || settings.type !== 'image' || !settings.image) return []
+
+  return getPageWatermarkTilePositions(settings, pageConfig.value).map((tile, index) => ({
+    ...getPageWatermarkBaseConfig(settings, tile, index),
+    image: settings.image
+  }))
+}
+
 function setPageColumnWidthInches(value) {
   const count = pageColumnCount.value
 
@@ -672,6 +940,8 @@ const pageMarginGuideConfig = computed(() => {
   }
 })
 const pageColumnGuideConfigs = computed(() => getPageColumnGuideConfigs())
+const pageWatermarkTextConfigs = computed(() => getPageWatermarkTextConfigs())
+const pageWatermarkImageConfigs = computed(() => getPageWatermarkImageConfigs())
 const pageClipConfig = computed(() => ({
   clipX: pageConfig.value.x,
   clipY: pageConfig.value.y,
@@ -764,6 +1034,8 @@ const richRenderVersions = new Map()
 let canvasVersion = 0
 let generatedCanvasIdCounter = 0
 let clipboardPasteCount = 0
+const pageWatermarkImageLoadedSources = new WeakMap()
+const pageWatermarkImageLoadTokens = new WeakMap()
 const editorPosition = ref({
   x: 0,
   y: 0,
@@ -902,6 +1174,7 @@ function selectPage(pageId) {
   canvasVersion += 1
 
   nextTick(() => {
+    loadPageWatermarkImage(page)
     page.elements.forEach(renderImportedRichTextImages)
     updateTransformerSelection()
   })
@@ -910,7 +1183,8 @@ function selectPage(pageId) {
 function addPage() {
   const page = createCanvasPage(`Page ${pages.value.length + 1}`, {
     orientation: pageOrientation.value,
-    columns: activePageColumnSettings.value
+    columns: activePageColumnSettings.value,
+    watermark: activePageWatermark.value
   })
 
   pages.value.push(page)
@@ -927,7 +1201,8 @@ function duplicatePage(pageId = activePageId.value) {
   const usedIds = collectCanvasItemIds(getAllPageElements())
   const page = createCanvasPage(`${getPageTitle(sourcePage, sourceIndex)} Copy`, {
     orientation: sourcePage.orientation,
-    columns: sourcePage.columns
+    columns: sourcePage.columns,
+    watermark: sourcePage.watermark
   })
 
   page.elements = sourcePage.elements.map(item => {
@@ -1256,6 +1531,7 @@ function applyImportedBands(importedBands = [], importedActiveBandId = '') {
   const nextBands = Array.isArray(importedBands)
     ? importedBands
       .filter(band => band && typeof band === 'object')
+      .filter(band => String(band.type || '').trim() !== 'watermark')
       .map(band => normalizeBandForStorage(band, usedIds))
     : []
 
@@ -6754,6 +7030,27 @@ watch(applyPageColumnsToAllPages, value => {
 
   applyPageColumnSettingsToPages(activePageColumnSettings.value)
 }, { flush: 'sync' })
+watch(applyPageWatermarkToAllPages, value => {
+  if (!value) return
+
+  applyPageWatermarkSettingsToPages(activePageWatermark.value)
+}, { flush: 'sync' })
+watch(activePageWatermark, settings => {
+  if (!applyPageWatermarkToAllPages.value || isApplyingPageWatermarkSettings) return
+
+  applyPageWatermarkSettingsToPages(settings)
+}, { deep: true, flush: 'sync' })
+watch(
+  () => [
+    activePageId.value,
+    activePageWatermark.value?.type,
+    activePageWatermark.value?.imageUrl
+  ],
+  () => {
+    loadActivePageWatermarkImage()
+  },
+  { flush: 'post' }
+)
 watch(pagePixelSize, () => nextTick(removeOutsideCanvasElements))
 
 function isTargetInsideNode(target, node) {
@@ -7925,6 +8222,7 @@ async function serializeCanvasPage(page, index, options = {}) {
   const sizeInches = getPageSizeInchesForOrientation(orientation)
   const sizePixels = getPagePixelSizeForOrientation(orientation)
   const columns = getClampedPageColumnSettings(page?.columns, orientation)
+  const watermark = getSerializableLayoutValue(clonePageWatermarkSettings(page?.watermark))
   const serializedElements = await Promise.all(
     (Array.isArray(page?.elements) ? page.elements : [])
       .map(item => serializeLayoutElement(item, options))
@@ -7937,6 +8235,7 @@ async function serializeCanvasPage(page, index, options = {}) {
     sizeInches,
     sizePixels,
     columns,
+    watermark,
     elements: serializedElements,
     variables: getTemplateVariablesFromElements(serializedElements)
   }
@@ -7976,7 +8275,8 @@ async function createLayoutExportData(options = {}) {
       marginPreset: selectedPageMarginPreset.value,
       marginsInches: { ...pageMarginsInches.value },
       customMarginsInches: { ...customPageMarginsInches.value },
-      columns: getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation)
+      columns: getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation),
+      watermark: getSerializableLayoutValue(clonePageWatermarkSettings(activePage.value?.watermark))
     },
     variables: getTemplateVariablesFromElements(allSerializedElements),
     pages: serializedPages,
@@ -8134,6 +8434,7 @@ function getImportLayoutPages(data) {
     data?.page?.columns || DEFAULT_PAGE_COLUMN_SETTINGS,
     fallbackOrientation
   )
+  const fallbackWatermark = clonePageWatermarkSettings(data?.page?.watermark)
 
   if (Array.isArray(data?.pages)) {
     return data.pages
@@ -8146,6 +8447,7 @@ function getImportLayoutPages(data) {
           page.columns || fallbackColumns,
           getNormalizedPageOrientation(page.orientation || fallbackOrientation)
         ),
+        watermark: clonePageWatermarkSettings(page.watermark || fallbackWatermark),
         elements: page.elements
       }))
   }
@@ -8158,6 +8460,7 @@ function getImportLayoutPages(data) {
       name: 'Page 1',
       orientation: fallbackOrientation,
       columns: fallbackColumns,
+      watermark: fallbackWatermark,
       elements: layoutElements
     }]
   }
@@ -8205,6 +8508,14 @@ async function loadImportedImage(source, stats) {
       return null
     }
   }
+}
+
+async function createImportedPageWatermark(settings, stats) {
+  const page = { watermark: clonePageWatermarkSettings(settings) }
+
+  await loadPageWatermarkImage(page, stats)
+
+  return page.watermark
 }
 
 function getImportElementConfig(item) {
@@ -8428,6 +8739,7 @@ async function importLayoutData(data) {
     const importedElements = await Promise.all(
       page.elements.map(item => createImportedElement(item, stats))
     )
+    const importedWatermark = await createImportedPageWatermark(page.watermark, stats)
     const importedId = String(page.id || '').trim()
     const pageId = importedId && !usedPageIds.has(importedId)
       ? importedId
@@ -8440,6 +8752,7 @@ async function importLayoutData(data) {
       name: page.name || `Page ${index + 1}`,
       orientation: getNormalizedPageOrientation(page.orientation),
       columns: getClampedPageColumnSettings(page.columns || DEFAULT_PAGE_COLUMN_SETTINGS, page.orientation),
+      watermark: importedWatermark,
       elements: importedElements.filter(Boolean)
     }
   }))
@@ -8574,11 +8887,18 @@ onBeforeUnmount(() => {
     pageColumnWidthMax,
     pageColumnSummary,
     applyPageColumnsToAllPages,
+    activePageWatermark,
+    applyPageWatermarkToAllPages,
+    pageWatermarkTypeOptions,
+    pageWatermarkFontStyleOptions,
+    uploadPageWatermarkImage,
     getCanvasPageColumnCount,
     pageConfig,
     pageNumberConfig,
     pageMarginGuideConfig,
     pageColumnGuideConfigs,
+    pageWatermarkTextConfigs,
+    pageWatermarkImageConfigs,
     bandGuideConfigs,
     bandResizeHandleConfigs,
     pageClipConfig,

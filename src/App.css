@@ -399,7 +399,8 @@
   cursor: not-allowed;
 }
 
-.page-number-settings {
+.page-number-settings,
+.page-watermark-settings {
   display: grid;
   gap: 8px;
   padding-top: 8px;
@@ -431,9 +432,17 @@
 }
 
 .page-number-settings select:disabled,
-.page-number-settings input:disabled {
+.page-number-settings input:disabled,
+.page-watermark-settings select:disabled,
+.page-watermark-settings input:disabled,
+.file-upload-button.disabled {
   color: #94a3b8;
   cursor: not-allowed;
+}
+
+.watermark-upload-button {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .bands-panel {

@@ -314,6 +314,229 @@ export default {
             >
           </label>
         </div>
+
+        <div class="page-watermark-settings">
+          <label class="checkbox-control">
+            <span>Watermark</span>
+            <input v-model="activePageWatermark.enabled" type="checkbox">
+          </label>
+
+          <label class="checkbox-control">
+            <span>Apply to all pages</span>
+            <input v-model="applyPageWatermarkToAllPages" type="checkbox">
+          </label>
+
+          <label class="control-row">
+            <span>Type</span>
+            <select
+                v-model="activePageWatermark.type"
+                class="control-select"
+                :disabled="!activePageWatermark.enabled"
+            >
+              <option
+                  v-for="option in pageWatermarkTypeOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <label v-if="activePageWatermark.type === 'text'" class="control-row">
+            <span>Text</span>
+            <input
+                v-model="activePageWatermark.text"
+                class="chart-text-input"
+                type="text"
+                :disabled="!activePageWatermark.enabled"
+            >
+          </label>
+
+          <template v-else>
+            <label class="control-row">
+              <span>Image URL</span>
+              <input
+                  v-model.lazy.trim="activePageWatermark.imageUrl"
+                  class="chart-text-input"
+                  type="text"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+
+            <label
+                class="file-upload-button watermark-upload-button"
+                :class="{ disabled: !activePageWatermark.enabled }"
+            >
+              Upload image
+              <input
+                  type="file"
+                  accept="image/*"
+                  :disabled="!activePageWatermark.enabled"
+                  @change="uploadPageWatermarkImage"
+              >
+            </label>
+          </template>
+
+          <div class="page-number-style-grid">
+            <label>
+              <span>X</span>
+              <input
+                  v-model.number="activePageWatermark.x"
+                  type="number"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+            <label>
+              <span>Y</span>
+              <input
+                  v-model.number="activePageWatermark.y"
+                  type="number"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+          </div>
+
+          <div class="page-number-style-grid">
+            <label>
+              <span>Width</span>
+              <input
+                  v-model.number="activePageWatermark.width"
+                  type="number"
+                  min="8"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+            <label>
+              <span>Height</span>
+              <input
+                  v-model.number="activePageWatermark.height"
+                  type="number"
+                  min="8"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+          </div>
+
+          <div class="page-number-style-grid">
+            <label>
+              <span>Rotate</span>
+              <input
+                  v-model.number="activePageWatermark.rotation"
+                  type="number"
+                  min="-360"
+                  max="360"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+            <label>
+              <span>Opacity</span>
+              <input
+                  v-model.number="activePageWatermark.opacity"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+          </div>
+
+          <template v-if="activePageWatermark.type === 'text'">
+            <div class="page-number-style-grid">
+              <label>
+                <span>Color</span>
+                <input
+                    v-model="activePageWatermark.color"
+                    type="color"
+                    :disabled="!activePageWatermark.enabled"
+                >
+              </label>
+              <label>
+                <span>Size</span>
+                <input
+                    v-model.number="activePageWatermark.fontSize"
+                    type="number"
+                    min="6"
+                    max="240"
+                    step="1"
+                    :disabled="!activePageWatermark.enabled"
+                >
+              </label>
+            </div>
+
+            <label class="control-row">
+              <span>Font</span>
+              <select
+                  v-model="activePageWatermark.fontFamily"
+                  class="control-select"
+                  :disabled="!activePageWatermark.enabled"
+              >
+                <option
+                    v-for="font in fontOptions"
+                    :key="font.value"
+                    :value="font.value"
+                >
+                  {{ font.label }}
+                </option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Style</span>
+              <select
+                  v-model="activePageWatermark.fontStyle"
+                  class="control-select"
+                  :disabled="!activePageWatermark.enabled"
+              >
+                <option
+                    v-for="option in pageWatermarkFontStyleOptions"
+                    :key="option.value"
+                    :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </template>
+
+          <label class="checkbox-control">
+            <span>Repeat</span>
+            <input
+                v-model="activePageWatermark.repeat"
+                type="checkbox"
+                :disabled="!activePageWatermark.enabled"
+            >
+          </label>
+
+          <div v-if="activePageWatermark.repeat" class="page-number-style-grid">
+            <label>
+              <span>Gap X</span>
+              <input
+                  v-model.number="activePageWatermark.repeatGapX"
+                  type="number"
+                  min="0"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+            <label>
+              <span>Gap Y</span>
+              <input
+                  v-model.number="activePageWatermark.repeatGapY"
+                  type="number"
+                  min="0"
+                  step="1"
+                  :disabled="!activePageWatermark.enabled"
+              >
+            </label>
+          </div>
+        </div>
       </div>
 
       <div class="bands-panel">
@@ -1832,6 +2055,21 @@ export default {
                 ref="transformerRef"
                 :config="transformerConfig"
             />
+          </v-layer>
+
+          <v-layer :config="{ listening: false }">
+            <v-group :config="pageClipConfig">
+              <v-text
+                  v-for="watermark in pageWatermarkTextConfigs"
+                  :key="watermark.id"
+                  :config="watermark"
+              />
+              <v-image
+                  v-for="watermark in pageWatermarkImageConfigs"
+                  :key="watermark.id"
+                  :config="watermark"
+              />
+            </v-group>
           </v-layer>
         </v-stage>
 

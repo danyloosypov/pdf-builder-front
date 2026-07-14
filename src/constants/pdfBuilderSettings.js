@@ -53,7 +53,6 @@ export const bandTypeOptions = [
   { value: 'spacer', label: 'Spacer Band', group: 'support', placement: 'body', scope: 'spacing', defaultHeight: 36, color: '#64748b' },
   { value: 'overlay', label: 'Overlay Band', group: 'support', placement: 'full', scope: 'over-content', defaultHeight: 0, color: '#0ea5e9' },
   { value: 'background', label: 'Background Band', group: 'support', placement: 'full', scope: 'under-content', defaultHeight: 0, color: '#64748b' },
-  { value: 'watermark', label: 'Watermark Band', group: 'support', placement: 'full', scope: 'under-content', defaultHeight: 0, color: '#94a3b8' },
   { value: 'table-header', label: 'Table Header Band', group: 'table', placement: 'body', scope: 'table-header', defaultHeight: 44, color: '#7c2d12' },
   { value: 'table-detail', label: 'Table Detail Band', group: 'table', placement: 'body', scope: 'table-row', defaultHeight: 44, color: '#9a3412' },
   { value: 'table-footer', label: 'Table Footer Band', group: 'table', placement: 'body', scope: 'table-footer', defaultHeight: 44, color: '#7c2d12' }
