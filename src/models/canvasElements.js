@@ -257,6 +257,8 @@ export class TableElement extends CanvasElement {
       draggable: true,
       colWidths: [100, 100, 100],
       rowHeights: [40, 40, 40],
+      alternateRowFillEnabled: false,
+      alternateRowFill: '#f8fafc',
       cells: [],
       ...config
     })

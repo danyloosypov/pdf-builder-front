@@ -941,6 +941,22 @@ export default {
           <span v-if="selectedTableCells.length"> - {{ selectedTableCells.length }} selected</span>
         </div>
 
+        <label class="checkbox-control">
+          <input v-model="selectedTable.alternateRowFillEnabled" type="checkbox">
+          <span>Alternate row background</span>
+        </label>
+
+        <div class="chart-color-grid">
+          <label>
+            <span>Every other row</span>
+            <input
+                v-model="selectedTable.alternateRowFill"
+                type="color"
+                :disabled="!selectedTable.alternateRowFillEnabled"
+            >
+          </label>
+        </div>
+
         <div v-if="selectedTableCells.length" class="table-cell-settings">
           <label class="control-row">
             <span>Repeat Row</span>

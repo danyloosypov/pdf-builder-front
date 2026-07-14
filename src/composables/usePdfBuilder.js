@@ -2726,6 +2726,11 @@ function ensureTableTrackSettings(table) {
   table.rowHeights = getTableRowHeights(table)
 }
 
+function ensureTableAlternateRowSettings(table) {
+  table.alternateRowFillEnabled = Boolean(table.alternateRowFillEnabled)
+  table.alternateRowFill = getHexColor(table.alternateRowFill, '#f8fafc')
+}
+
 function getTableTrackOffset(sizes, index) {
   return sizes
     .slice(0, index)
@@ -2748,6 +2753,7 @@ function ensureTableSettings(item) {
   item.rotation = normalizeElementRotation(item.rotation || 0)
   item.draggable = item.draggable !== false
 
+  ensureTableAlternateRowSettings(item)
   ensureTableTrackSettings(item)
   normalizeTableCells(item)
 }
@@ -2805,10 +2811,25 @@ function getTableCellRectConfig(table, cell) {
     y: 0,
     width: layout.width,
     height: layout.height,
-    fill: cell.fill || defaultTableCellSettings.fill,
+    fill: getTableCellBackgroundFill(table, cell),
     strokeWidth: 0,
     listening: true
   }
+}
+
+function isAlternateTableRow(table, cell) {
+  return Boolean(table?.alternateRowFillEnabled) && Number(cell?.row) % 2 === 1
+}
+
+function getTableCellBackgroundFill(table, cell) {
+  const cellFill = getHexColor(cell?.fill, defaultTableCellSettings.fill)
+  const defaultFill = getHexColor(defaultTableCellSettings.fill, '#ffffff')
+
+  if (isAlternateTableRow(table, cell) && cellFill === defaultFill) {
+    return getHexColor(table?.alternateRowFill, '#f8fafc')
+  }
+
+  return cellFill
 }
 
 function getVerticalTableCellTextAlign(cell) {
@@ -3355,7 +3376,7 @@ function getTableCellEditorStyle(table, cell) {
     width: `${Math.max(1, isVertical ? layout.height : layout.width)}px`,
     height: `${Math.max(1, isVertical ? layout.width : layout.height)}px`,
     color: cell.textColor || defaultTableCellSettings.textColor,
-    background: cell.fill || defaultTableCellSettings.fill,
+    background: getTableCellBackgroundFill(table, cell),
     fontSize: `${cell.fontSize || defaultTableCellSettings.fontSize}px`,
     textAlign: isVertical
       ? getVerticalTableCellTextAlign(cell)
