@@ -131,6 +131,14 @@ const DEFAULT_PAGE_COLUMN_SETTINGS = {
   count: 1,
   gapInches: 0.2
 }
+const DEFAULT_PAGE_GRID_SETTINGS = {
+  visible: true,
+  snap: false,
+  size: 20
+}
+const MIN_PAGE_GRID_SIZE = 8
+const MAX_PAGE_GRID_SIZE = 240
+const PAGE_GRID_MAJOR_INTERVAL = 5
 const pageWatermarkTypeOptions = [
   { value: 'text', label: 'Text' },
   { value: 'image', label: 'Image' }
@@ -240,6 +248,42 @@ function getNormalizedPageColumnSettings(settings = {}) {
     count: getNormalizedPageColumnCount(settings.count),
     gapInches: getNormalizedPageColumnGapInches(settings.gapInches)
   }
+}
+
+function getNormalizedPageGridSize(value) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) return DEFAULT_PAGE_GRID_SETTINGS.size
+
+  return clampNumber(Math.round(numericValue), MIN_PAGE_GRID_SIZE, MAX_PAGE_GRID_SIZE)
+}
+
+function getNormalizedPageGridBoolean(source, keys, fallback) {
+  const foundKey = keys.find(key => source[key] !== undefined)
+
+  return foundKey ? Boolean(source[foundKey]) : fallback
+}
+
+function getNormalizedPageGridSettings(settings = {}) {
+  const source = settings && typeof settings === 'object' ? settings : {}
+
+  return {
+    visible: getNormalizedPageGridBoolean(
+      source,
+      ['visible', 'show', 'showGrid', 'gridVisible'],
+      DEFAULT_PAGE_GRID_SETTINGS.visible
+    ),
+    snap: getNormalizedPageGridBoolean(
+      source,
+      ['snap', 'snapToGrid', 'gridSnap'],
+      DEFAULT_PAGE_GRID_SETTINGS.snap
+    ),
+    size: getNormalizedPageGridSize(source.size ?? source.gridSize ?? source.spacing)
+  }
+}
+
+function clonePageGridSettings(settings = {}) {
+  return getNormalizedPageGridSettings(settings)
 }
 
 function getNormalizedPageWatermarkType(value) {
@@ -471,6 +515,34 @@ const currentPageMargins = computed(() => ({
   bottom: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.bottom)),
   left: formatPageDimension(convertInchesToPageUnit(pageMarginsInches.value.left))
 }))
+const pageGridSettings = ref(clonePageGridSettings())
+const canvasGridVisible = computed({
+  get: () => pageGridSettings.value.visible,
+  set: value => {
+    pageGridSettings.value = getNormalizedPageGridSettings({
+      ...pageGridSettings.value,
+      visible: value
+    })
+  }
+})
+const canvasSnapToGrid = computed({
+  get: () => pageGridSettings.value.snap,
+  set: value => {
+    pageGridSettings.value = getNormalizedPageGridSettings({
+      ...pageGridSettings.value,
+      snap: value
+    })
+  }
+})
+const canvasGridSize = computed({
+  get: () => pageGridSettings.value.size,
+  set: value => {
+    pageGridSettings.value = getNormalizedPageGridSettings({
+      ...pageGridSettings.value,
+      size: value
+    })
+  }
+})
 const pageContentSizeInches = computed(() => getPageContentSizeInchesForOrientation(pageOrientation.value))
 const activePageColumnSettings = computed(() => (
   getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation)
@@ -558,6 +630,14 @@ function getNormalizedPageNumberSettings(settings = {}) {
 
 function getSerializablePageNumberSettings() {
   return getNormalizedPageNumberSettings(pageNumberSettings.value)
+}
+
+function getSerializablePageGridSettings() {
+  return getNormalizedPageGridSettings(pageGridSettings.value)
+}
+
+function applyImportedPageGridSettings(settings) {
+  pageGridSettings.value = getNormalizedPageGridSettings(settings)
 }
 
 function applyImportedPageNumberSettings(settings) {
@@ -879,6 +959,50 @@ function getPageColumnGuideConfigs() {
   }))
 }
 
+function getPageGridLineConfigs() {
+  const settings = getNormalizedPageGridSettings(pageGridSettings.value)
+
+  if (!settings.visible || isPdfExporting.value) return []
+
+  const config = pageConfig.value
+  const lines = []
+  const gridSize = settings.size
+  const rounded = value => Math.round(value * 1000) / 1000
+  const getStroke = index => (
+    index % PAGE_GRID_MAJOR_INTERVAL === 0
+      ? 'rgba(148, 163, 184, 0.62)'
+      : 'rgba(203, 213, 225, 0.54)'
+  )
+
+  for (let offset = gridSize, index = 1; offset < config.width; offset += gridSize, index += 1) {
+    const x = rounded(config.x + offset)
+
+    lines.push({
+      id: `page-grid-v-${activePageId.value}-${index}`,
+      points: [x, config.y, x, config.y + config.height],
+      stroke: getStroke(index),
+      strokeWidth: 1,
+      listening: false,
+      perfectDrawEnabled: false
+    })
+  }
+
+  for (let offset = gridSize, index = 1; offset < config.height; offset += gridSize, index += 1) {
+    const y = rounded(config.y + offset)
+
+    lines.push({
+      id: `page-grid-h-${activePageId.value}-${index}`,
+      points: [config.x, y, config.x + config.width, y],
+      stroke: getStroke(index),
+      strokeWidth: 1,
+      listening: false,
+      perfectDrawEnabled: false
+    })
+  }
+
+  return lines
+}
+
 const pageConfig = computed(() => ({
   width: pagePixelSize.value.width,
   height: pagePixelSize.value.height,
@@ -940,6 +1064,7 @@ const pageMarginGuideConfig = computed(() => {
   }
 })
 const pageColumnGuideConfigs = computed(() => getPageColumnGuideConfigs())
+const pageGridLineConfigs = computed(() => getPageGridLineConfigs())
 const pageWatermarkTextConfigs = computed(() => getPageWatermarkTextConfigs())
 const pageWatermarkImageConfigs = computed(() => getPageWatermarkImageConfigs())
 const pageClipConfig = computed(() => ({
@@ -1962,11 +2087,19 @@ function getBandConstrainedDragPosition(item, position) {
   )
 }
 
+function getConstrainedElementDragPosition(item, position) {
+  const snappedPosition = getSnappedElementPosition(item, position)
+
+  if (!getBandById(item?.bandId)) return snappedPosition
+
+  return getBandConstrainedDragPosition(item, snappedPosition)
+}
+
 function getElementDragConstraintConfig(item) {
-  if (!getBandById(item?.bandId)) return {}
+  if (!getBandById(item?.bandId) && !isSnapToGridEnabled()) return {}
 
   return {
-    dragBoundFunc: position => getBandConstrainedDragPosition(item, position)
+    dragBoundFunc: position => getConstrainedElementDragPosition(item, position)
   }
 }
 
@@ -2451,15 +2584,17 @@ function addQR(dropPoint = null) {
       const position = dropPoint
         ? getTopLeftForDropPoint(dropPoint, 120, 120)
         : { x: 200, y: 200 }
-
-      elements.value.push(new ImageElement({
+      const item = new ImageElement({
         id,
         image: img,
         x: position.x,
         y: position.y,
         width: 120,
         height: 120
-      }))
+      })
+
+      snapElementPositionToGrid(item)
+      elements.value.push(item)
 
       nextTick(() => selectElement(id))
     }
@@ -2498,8 +2633,7 @@ function addBarcode(dropPoint = null) {
     const position = dropPoint
       ? getTopLeftForDropPoint(dropPoint, width, height)
       : { x: 200, y: 200 }
-
-    elements.value.push(new ImageElement({
+    const item = new ImageElement({
       id,
       image: img,
       x: position.x,
@@ -2507,7 +2641,10 @@ function addBarcode(dropPoint = null) {
       width,
       height,
       objectFit: 'contain'
-    }))
+    })
+
+    snapElementPositionToGrid(item)
+    elements.value.push(item)
 
     nextTick(() => selectElement(id))
   }
@@ -2518,7 +2655,10 @@ function addBarcode(dropPoint = null) {
 }
 
 function addText() {
-  elements.value.push(new TextElement())
+  const item = new TextElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addClipboardText(text, pastePoint = null) {
@@ -2535,8 +2675,7 @@ function addClipboardText(text, pastePoint = null) {
   const height = Math.max(40, Math.ceil(lines.length * fontSize * lineHeight) + 12)
   const point = getCanvasPastePoint(pastePoint)
   const id = Date.now()
-
-  elements.value.push(new TextElement({
+  const item = new TextElement({
     id,
     text: value,
     x: clampNumber(point.x, bounds.x, Math.max(bounds.x, bounds.right - width)),
@@ -2545,7 +2684,10 @@ function addClipboardText(text, pastePoint = null) {
     height,
     fontSize,
     lineHeight
-  }))
+  })
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 
   nextTick(() => selectElement(id))
 
@@ -2627,15 +2769,17 @@ function addUploadedImage(file, dropPoint = null) {
     const y = dropPoint
       ? clampNumber(dropPoint.y - height / 2, bounds.y, bounds.bottom - height)
       : 200
-
-    elements.value.push(new ImageElement({
+    const item = new ImageElement({
       id,
       image: img,
       x,
       y,
       width,
       height
-    }))
+    })
+
+    snapElementPositionToGrid(item)
+    elements.value.push(item)
 
     nextTick(() => selectElement(id))
   }
@@ -2697,62 +2841,90 @@ function handleImageDrop(event) {
 }
 
 function addRect() {
-  elements.value.push(new RectElement())
+  const item = new RectElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addCircle() {
-  elements.value.push(new CircleElement())
+  const item = new CircleElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addTriangle() {
-  elements.value.push(new RegularPolygonElement({
+  const item = new RegularPolygonElement({
     type: 'triangle',
     sides: 3,
     radius: 55,
     fill: '#f59e0b',
     stroke: '#111827'
-  }))
+  })
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addRightTriangle() {
-  elements.value.push(new RightTriangleElement())
+  const item = new RightTriangleElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addLine() {
-  elements.value.push(new LineElement())
+  const item = new LineElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addArrow() {
-  elements.value.push(new ArrowElement())
+  const item = new ArrowElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addLabel() {
-  elements.value.push(new LabelElement())
+  const item = new LabelElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addPolygon() {
-  elements.value.push(new RegularPolygonElement())
+  const item = new RegularPolygonElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 }
 
 function addChart() {
   const id = Date.now()
-
-  elements.value.push(new ChartElement({
+  const item = new ChartElement({
     id,
     ...defaultChartSettings
-  }))
+  })
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 
   nextTick(() => selectElement(id))
 }
 
 function addPieChart() {
   const id = Date.now()
-
-  elements.value.push(new PieChartElement({
+  const item = new PieChartElement({
     id,
     ...defaultPieChartSettings,
     sliceColors: [...defaultPieChartSettings.sliceColors]
-  }))
+  })
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 
   nextTick(() => selectElement(id))
 }
@@ -2833,6 +3005,7 @@ function addSidebarElementToCanvas(type, dropPoint) {
   if (!item) return false
 
   placeCanvasElementAtDropPoint(item, dropPoint)
+  snapElementPositionToGrid(item)
   elements.value.push(item)
   nextTick(() => selectElement(item.id))
 
@@ -4103,8 +4276,7 @@ function addTable() {
   const rows = getTableDimensionValue(tableRowsInput.value, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
   const cols = getTableDimensionValue(tableColsInput.value, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
   const id = Date.now()
-
-  elements.value.push(new TableElement({
+  const item = new TableElement({
     id,
     rows,
     cols,
@@ -4113,7 +4285,10 @@ function addTable() {
     colWidths: Array.from({ length: cols }, () => DEFAULT_TABLE_CELL_WIDTH),
     rowHeights: Array.from({ length: rows }, () => DEFAULT_TABLE_CELL_HEIGHT),
     cells: createDefaultTableCells(id, rows, cols)
-  }))
+  })
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
 
   nextTick(() => selectElement(id))
 }
@@ -4232,16 +4407,121 @@ function getCanvasBounds() {
   }
 }
 
+function isSnapToGridEnabled() {
+  return getNormalizedPageGridSettings(pageGridSettings.value).snap
+}
+
+function snapValueToGrid(value, axis = 'x') {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) return 0
+
+  const gridSize = getNormalizedPageGridSize(pageGridSettings.value.size)
+  const origin = axis === 'y' ? pageConfig.value.y : pageConfig.value.x
+
+  return origin + Math.round((numericValue - origin) / gridSize) * gridSize
+}
+
+function snapPointToGrid(point) {
+  if (!isSnapToGridEnabled()) return point
+
+  return {
+    x: snapValueToGrid(point?.x, 'x'),
+    y: snapValueToGrid(point?.y, 'y')
+  }
+}
+
+function snapLengthToGrid(value, min = 1) {
+  const numericValue = Number(value)
+  const minValue = Math.max(1, Number(min) || 1)
+
+  if (!Number.isFinite(numericValue)) return minValue
+  if (!isSnapToGridEnabled()) return Math.max(minValue, numericValue)
+
+  const gridSize = getNormalizedPageGridSize(pageGridSettings.value.size)
+
+  return Math.max(minValue, Math.round(numericValue / gridSize) * gridSize)
+}
+
+function getSnappedElementPosition(item, position) {
+  const nextPosition = {
+    x: Number(position?.x) || 0,
+    y: Number(position?.y) || 0
+  }
+
+  if (!isSnapToGridEnabled()) return nextPosition
+
+  if (item?.type === 'line' || item?.type === 'arrow') {
+    const bounds = getLineLocalBounds(item)
+    const snappedTopLeft = snapPointToGrid({
+      x: nextPosition.x + bounds.minX,
+      y: nextPosition.y + bounds.minY
+    })
+
+    return {
+      x: snappedTopLeft.x - bounds.minX,
+      y: snappedTopLeft.y - bounds.minY
+    }
+  }
+
+  return snapPointToGrid(nextPosition)
+}
+
+function snapElementPositionToGrid(item, node = null) {
+  if (!item || !isSnapToGridEnabled()) return
+
+  const position = getSnappedElementPosition(item, {
+    x: getItemCoordinate(item, 'x'),
+    y: getItemCoordinate(item, 'y')
+  })
+
+  item.x = position.x
+  item.y = position.y
+  node?.x?.(item.x)
+  node?.y?.(item.y)
+}
+
+function snapElementSizeToGrid(item, node = null) {
+  if (!item || !isSnapToGridEnabled()) return
+
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table'].includes(item.type)) {
+    const minWidth = item.type === 'text' ? 30 : 10
+    const minHeight = item.type === 'text' ? 20 : 10
+
+    item.width = snapLengthToGrid(item.width, minWidth)
+    item.height = snapLengthToGrid(item.height, minHeight)
+    node?.width?.(item.width)
+    node?.height?.(item.height)
+    return
+  }
+
+  if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
+    const diameter = snapLengthToGrid((Number(item.radius) || 0) * 2, 2)
+
+    item.radius = diameter / 2
+    node?.radius?.(item.radius)
+  }
+}
+
+function applyElementPositionConstraints(item, node = null) {
+  snapElementPositionToGrid(item, node)
+  constrainElementPositionToBand(item, node)
+}
+
 function getTopLeftForDropPoint(dropPoint, width, height) {
   const bounds = getCanvasBounds()
   const itemWidth = Math.max(1, Number(width) || 1)
   const itemHeight = Math.max(1, Number(height) || 1)
   const maxX = Math.max(bounds.x, bounds.right - itemWidth)
   const maxY = Math.max(bounds.y, bounds.bottom - itemHeight)
-
-  return {
+  const position = snapPointToGrid({
     x: clampNumber((dropPoint?.x ?? bounds.x) - itemWidth / 2, bounds.x, maxX),
     y: clampNumber((dropPoint?.y ?? bounds.y) - itemHeight / 2, bounds.y, maxY)
+  })
+
+  return {
+    x: clampNumber(position.x, bounds.x, maxX),
+    y: clampNumber(position.y, bounds.y, maxY)
   }
 }
 
@@ -4251,10 +4531,14 @@ function getCenterForDropPoint(dropPoint, width, height) {
   const itemHeight = Math.max(1, Number(height) || 1)
   const horizontalInset = Math.min(itemWidth / 2, bounds.width / 2)
   const verticalInset = Math.min(itemHeight / 2, bounds.height / 2)
-
-  return {
+  const position = snapPointToGrid({
     x: clampNumber(dropPoint?.x ?? bounds.x + bounds.width / 2, bounds.x + horizontalInset, bounds.right - horizontalInset),
     y: clampNumber(dropPoint?.y ?? bounds.y + bounds.height / 2, bounds.y + verticalInset, bounds.bottom - verticalInset)
+  })
+
+  return {
+    x: clampNumber(position.x, bounds.x + horizontalInset, bounds.right - horizontalInset),
+    y: clampNumber(position.y, bounds.y + verticalInset, bounds.bottom - verticalInset)
   }
 }
 
@@ -4263,8 +4547,7 @@ function getLinePositionForDropPoint(item, dropPoint) {
   const lineBounds = getLineLocalBounds(item)
   const maxX = Math.max(bounds.x - lineBounds.minX, bounds.right - lineBounds.minX - lineBounds.width)
   const maxY = Math.max(bounds.y - lineBounds.minY, bounds.bottom - lineBounds.minY - lineBounds.height)
-
-  return {
+  const position = getSnappedElementPosition(item, {
     x: clampNumber(
       (dropPoint?.x ?? bounds.x + bounds.width / 2) - lineBounds.minX - lineBounds.width / 2,
       bounds.x - lineBounds.minX,
@@ -4275,6 +4558,11 @@ function getLinePositionForDropPoint(item, dropPoint) {
       bounds.y - lineBounds.minY,
       maxY
     )
+  })
+
+  return {
+    x: clampNumber(position.x, bounds.x - lineBounds.minX, maxX),
+    y: clampNumber(position.y, bounds.y - lineBounds.minY, maxY)
   }
 }
 
@@ -4303,6 +4591,7 @@ function placeCanvasElementAtDropPoint(item, dropPoint) {
 
   item.x = position.x
   item.y = position.y
+  snapElementPositionToGrid(item)
   return item
 }
 
@@ -6198,6 +6487,7 @@ function preparePastedCanvasItem(item, delta, usedIds) {
 
   assignClonedCanvasItemIds(pastedItem, usedIds)
   moveCanvasItemByDelta(pastedItem, delta.x, delta.y)
+  snapElementPositionToGrid(pastedItem)
   ensureImportedElementSettings(pastedItem)
 
   return pastedItem
@@ -7520,7 +7810,7 @@ function updatePosition(e, id) {
 
   el.x = e.target.x()
   el.y = e.target.y()
-  constrainElementPositionToBand(el, e.target)
+  applyElementPositionConstraints(el, e.target)
 
   if (!removeElementIfOutsideCanvas(e.target, id)) {
     syncRepeatedBandElement(el)
@@ -7533,7 +7823,7 @@ function updatePositionDuringDrag(e, id) {
 
   el.x = e.target.x()
   el.y = e.target.y()
-  constrainElementPositionToBand(el, e.target)
+  applyElementPositionConstraints(el, e.target)
 }
 
 /* -------------------------
@@ -7544,6 +7834,7 @@ function updateTransform(e, id) {
   const node = e.target
   const el = elements.value.find(i => i.id === id)
   if (!el) return
+  const wasScaled = Math.abs(node.scaleX() - 1) > 0.001 || Math.abs(node.scaleY() - 1) > 0.001
 
   el.x = node.x()
   el.y = node.y()
@@ -7556,10 +7847,11 @@ function updateTransform(e, id) {
     node.height(el.height)
     node.scaleX(1)
     node.scaleY(1)
+    if (wasScaled) snapElementSizeToGrid(el, node)
     el.x = node.x()
     el.y = node.y()
     constrainElementSizeToBand(el, node)
-    constrainElementPositionToBand(el, node)
+    applyElementPositionConstraints(el, node)
 
     if (removeElementIfOutsideCanvas(node, id)) return
 
@@ -7579,6 +7871,7 @@ function updateTransform(e, id) {
     node.height(el.height)
     node.scaleX(1)
     node.scaleY(1)
+    if (wasScaled) snapElementSizeToGrid(el, node)
   }
 
   if (el.type === 'circle') {
@@ -7586,6 +7879,7 @@ function updateTransform(e, id) {
     node.radius(el.radius)
     node.scaleX(1)
     node.scaleY(1)
+    if (wasScaled) snapElementSizeToGrid(el, node)
   }
 
   if (regularPolygonShapeTypes.includes(el.type)) {
@@ -7593,6 +7887,7 @@ function updateTransform(e, id) {
     node.radius(el.radius)
     node.scaleX(1)
     node.scaleY(1)
+    if (wasScaled) snapElementSizeToGrid(el, node)
   }
 
   if (['line', 'arrow', 'label', 'group'].includes(el.type)) {
@@ -7603,7 +7898,7 @@ function updateTransform(e, id) {
   el.x = node.x()
   el.y = node.y()
   constrainElementSizeToBand(el, node)
-  constrainElementPositionToBand(el, node)
+  applyElementPositionConstraints(el, node)
   if (!removeElementIfOutsideCanvas(node, id)) {
     syncRepeatedBandElement(el)
   }
@@ -8269,6 +8564,7 @@ async function createLayoutExportData(options = {}) {
       unit: pageUnit.value,
       orientation: pageOrientation.value,
       canvasColor: canvasColor.value,
+      grid: getSerializablePageGridSettings(),
       sizeInches: { ...pageSizeInches.value },
       sizePixels: { ...pagePixelSize.value },
       customSizeInches: { ...customPageSizeInches.value },
@@ -8667,6 +8963,7 @@ function applyImportedPageSettings(page) {
   if (/^#[\da-f]{6}$/i.test(page.canvasColor || '')) canvasColor.value = page.canvasColor
   if (pageSizePresets.some(preset => preset.value === page.preset)) selectedPagePreset.value = page.preset
   if (pageMarginPresets.some(preset => preset.value === page.marginPreset)) selectedPageMarginPreset.value = page.marginPreset
+  applyImportedPageGridSettings(page.grid || page.canvasGrid || page.gridSettings)
 
   if (page.customSizeInches && typeof page.customSizeInches === 'object') {
     const width = Number(page.customSizeInches.width)
@@ -8879,6 +9176,12 @@ onBeforeUnmount(() => {
     currentPageWidth,
     currentPageHeight,
     currentPageMargins,
+    pageGridSettings,
+    canvasGridVisible,
+    canvasSnapToGrid,
+    canvasGridSize,
+    MIN_PAGE_GRID_SIZE,
+    MAX_PAGE_GRID_SIZE,
     pageColumnCount,
     pageColumnGap,
     pageColumnGapMax,
@@ -8897,6 +9200,7 @@ onBeforeUnmount(() => {
     pageNumberConfig,
     pageMarginGuideConfig,
     pageColumnGuideConfigs,
+    pageGridLineConfigs,
     pageWatermarkTextConfigs,
     pageWatermarkImageConfigs,
     bandGuideConfigs,

@@ -25,6 +25,32 @@ export default {
           <input v-model="canvasColor" type="color" aria-label="Canvas color">
         </label>
 
+        <div class="grid-settings">
+          <div class="panel-subtitle">Grid</div>
+
+          <label class="checkbox-control">
+            <input v-model="canvasGridVisible" type="checkbox">
+            <span>Show grid</span>
+          </label>
+
+          <label class="checkbox-control">
+            <input v-model="canvasSnapToGrid" type="checkbox">
+            <span>Snap to grid</span>
+          </label>
+
+          <label class="control-row">
+            <span>Size (px)</span>
+            <input
+                v-model.number="canvasGridSize"
+                class="number-input"
+                type="number"
+                :min="MIN_PAGE_GRID_SIZE"
+                :max="MAX_PAGE_GRID_SIZE"
+                step="1"
+            >
+          </label>
+        </div>
+
         <label class="control-row">
           <span>Preset</span>
           <select v-model="selectedPagePreset" class="control-select">
@@ -1930,6 +1956,11 @@ export default {
         >
           <v-layer>
             <v-rect :config="pageConfig" />
+            <v-line
+                v-for="line in pageGridLineConfigs"
+                :key="line.id"
+                :config="line"
+            />
             <v-rect :config="pageMarginGuideConfig" />
             <v-rect
                 v-for="guide in pageColumnGuideConfigs"
