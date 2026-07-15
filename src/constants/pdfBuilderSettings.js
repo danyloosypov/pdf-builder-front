@@ -70,6 +70,7 @@ export const SIDEBAR_ELEMENT_DRAG_TYPE = 'application/x-pdf-builder-sidebar-elem
 export const sidebarElementDragTypes = new Set([
   'text',
   'label',
+  'checkbox',
   'rect',
   'triangle',
   'circle',
@@ -120,10 +121,31 @@ export const DEFAULT_TABLE_CELL_WIDTH = 100
 export const DEFAULT_TABLE_CELL_HEIGHT = 40
 export const CLIPBOARD_PASTE_OFFSET = 24
 
+export const checkboxStyleOptions = [
+  { label: 'Cross', value: 'cross' },
+  { label: 'Check', value: 'check' },
+  { label: 'Struck rectangle', value: 'strikeRect' },
+  { label: 'Rectangle + check', value: 'rectCheck' },
+  { label: 'Struck circle', value: 'strikeCircle' },
+  { label: 'Circle + dot', value: 'circleDot' },
+  { label: 'Rectangle + dot', value: 'rectDot' }
+]
+
+export const defaultCheckboxSettings = {
+  checkboxStyle: 'rectCheck',
+  checked: true,
+  borderColor: '#111827',
+  borderWidth: 2,
+  borderStyle: 'solid',
+  markColor: '#2563eb',
+  fill: '#ffffff',
+  opacity: 1
+}
+
 export const shapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow']
 export const regularPolygonShapeTypes = ['polygon', 'triangle']
-export const borderableElementTypes = ['text', 'image', 'label', 'chart']
-export const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow', 'table']
+export const borderableElementTypes = ['text', 'image', 'label', 'chart', 'checkbox']
+export const dimensionEditableTypes = ['image', 'rect', 'circle', 'polygon', 'triangle', 'rightTriangle', 'line', 'arrow', 'table', 'checkbox']
 export const fillableShapeTypes = ['rect', 'circle', 'polygon', 'triangle', 'rightTriangle']
 
 export const cornerRadiusFields = [

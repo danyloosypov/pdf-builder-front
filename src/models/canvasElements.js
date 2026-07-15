@@ -207,6 +207,34 @@ export class LabelElement extends CanvasElement {
   }
 }
 
+export class CheckboxElement extends CanvasElement {
+  constructor(config = {}) {
+    const checkboxStyle = config.checkboxStyle ?? config.style ?? 'rectCheck'
+    const checked = config.checked ?? config.isChecked ?? config.value ?? config.state ?? true
+
+    super({
+      id: createId(),
+      type: 'checkbox',
+      x: 200,
+      y: 200,
+      width: 32,
+      height: 32,
+      rotation: 0,
+      checkboxStyle,
+      checked,
+      borderColor: '#111827',
+      borderWidth: 2,
+      borderStyle: 'solid',
+      markColor: '#2563eb',
+      fill: '#ffffff',
+      opacity: 1,
+      draggable: true,
+      templateVariable: '',
+      ...config
+    })
+  }
+}
+
 export class ChartElement extends CanvasElement {
   constructor(config = {}) {
     super({

@@ -1,4 +1,4 @@
-export const TEMPLATE_VARIABLE_ELEMENT_TYPES = new Set(['text', 'label', 'image'])
+export const TEMPLATE_VARIABLE_ELEMENT_TYPES = new Set(['text', 'label', 'image', 'checkbox'])
 
 function isTemplateTableCell(item) {
   return Boolean(
@@ -26,11 +26,13 @@ export function getTemplateVariableKey(item) {
 }
 
 export function getTemplateVariableValueType(item) {
+  if (item?.type === 'checkbox') return 'boolean'
   return item?.type === 'image' ? 'image' : 'text'
 }
 
 export function getTemplateVariableCurrentValue(item) {
   if (item?.type === 'text' || item?.type === 'label' || isTemplateTableCell(item)) return String(item.text || '')
+  if (item?.type === 'checkbox') return Boolean(item.checked)
 
   if (item?.type === 'image') {
     return [
@@ -467,6 +469,30 @@ function setTemplateImageValue(item, value) {
   return true
 }
 
+function getBooleanLikeValue(value) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+
+    if (['1', 'true', 'yes', 'y', 'on', 'checked', 'check'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'n', 'off', 'unchecked', 'uncheck', ''].includes(normalized)) return false
+  }
+
+  if (value && typeof value === 'object') {
+    const key = ['checked', 'value', 'state'].find(entry => Object.prototype.hasOwnProperty.call(value, entry))
+
+    if (key) return getBooleanLikeValue(value[key])
+  }
+
+  return Boolean(value)
+}
+
+function setTemplateCheckboxValue(item, value) {
+  item.checked = getBooleanLikeValue(value)
+}
+
 function getObjectTemplateValues(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value
@@ -546,6 +572,12 @@ export function applyTemplateVariablesToElements(elements, values = {}) {
         result.changed += 1
         result.imageElements.push(item)
       }
+      return
+    }
+
+    if (item.type === 'checkbox') {
+      setTemplateCheckboxValue(item, normalizedValues[key])
+      result.changed += 1
       return
     }
 

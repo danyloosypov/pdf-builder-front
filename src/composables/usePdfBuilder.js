@@ -26,7 +26,9 @@ import {
   bandTypeOptions,
   borderStyleOptions,
   borderableElementTypes,
+  checkboxStyleOptions,
   cornerRadiusFields,
+  defaultCheckboxSettings,
   defaultChartSettings,
   defaultElementBorderSettings,
   defaultImageSettings,
@@ -52,6 +54,7 @@ import { createRichTextStyleExtension, createTextAlignExtension } from '../edito
 import {
   ArrowElement,
   ChartElement,
+  CheckboxElement,
   CircleElement,
   GroupElement,
   ImageElement,
@@ -284,6 +287,32 @@ function getNormalizedPageGridSettings(settings = {}) {
 
 function clonePageGridSettings(settings = {}) {
   return getNormalizedPageGridSettings(settings)
+}
+
+function getNormalizedCheckboxStyle(value) {
+  const style = String(value || '').trim()
+
+  return checkboxStyleOptions.some(option => option.value === style)
+    ? style
+    : defaultCheckboxSettings.checkboxStyle
+}
+
+function getNormalizedCheckboxChecked(value, fallback = defaultCheckboxSettings.checked) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+
+    if (['1', 'true', 'yes', 'y', 'on', 'checked', 'check'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'n', 'off', 'unchecked', 'uncheck', ''].includes(normalized)) return false
+  }
+
+  return Boolean(fallback)
+}
+
+function getCheckboxStateValue(item) {
+  return item?.checked ?? item?.isChecked ?? item?.value ?? item?.state
 }
 
 function getNormalizedPageWatermarkType(value) {
@@ -2109,7 +2138,7 @@ function constrainElementSizeToSegment(item, segment, node = null) {
   const maxWidth = Math.max(1, segment.width)
   const maxHeight = Math.max(1, segment.height)
 
-  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group'].includes(item?.type)) {
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group', 'checkbox'].includes(item?.type)) {
     item.width = Math.min(Math.max(1, Number(item.width) || 1), maxWidth)
     item.height = Math.min(Math.max(1, Number(item.height) || 1), maxHeight)
     node?.width?.(item.width)
@@ -2494,6 +2523,7 @@ const selectedLabel = computed(() => {
 const selectedImage = computed(() => selectedItem.value?.type === 'image' ? selectedItem.value : null)
 const selectedChart = computed(() => selectedItem.value?.type === 'chart' ? selectedItem.value : null)
 const selectedPieChart = computed(() => selectedItem.value?.type === 'pieChart' ? selectedItem.value : null)
+const selectedCheckbox = computed(() => selectedItem.value?.type === 'checkbox' ? selectedItem.value : null)
 const selectedShape = computed(() => {
   const item = selectedItem.value
 
@@ -2530,7 +2560,7 @@ const transformerConfig = computed(() => {
     'bottom-right'
   ]
   const isMoveOnlySelection = selectedIds.value.length > 1 || selectedItem.value?.type === 'group'
-  const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart', 'pieChart'].includes(selectedItem.value?.type)
+  const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart', 'pieChart', 'checkbox'].includes(selectedItem.value?.type)
 
   return {
     visible: !isPdfExporting.value,
@@ -2895,6 +2925,13 @@ function addLabel() {
   elements.value.push(item)
 }
 
+function addCheckbox() {
+  const item = new CheckboxElement()
+
+  snapElementPositionToGrid(item)
+  elements.value.push(item)
+}
+
 function addPolygon() {
   const item = new RegularPolygonElement()
 
@@ -2937,6 +2974,8 @@ function createSidebarCanvasElement(type) {
       return new TextElement({ id })
     case 'label':
       return new LabelElement({ id })
+    case 'checkbox':
+      return new CheckboxElement({ id })
     case 'rect':
       return new RectElement({ id })
     case 'triangle':
@@ -4484,7 +4523,7 @@ function snapElementPositionToGrid(item, node = null) {
 function snapElementSizeToGrid(item, node = null) {
   if (!item || !isSnapToGridEnabled()) return
 
-  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table'].includes(item.type)) {
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'checkbox'].includes(item.type)) {
     const minWidth = item.type === 'text' ? 30 : 10
     const minHeight = item.type === 'text' ? 20 : 10
 
@@ -4776,6 +4815,191 @@ function getGroupedShapeTextImageConfig(item) {
   return getGroupedChildConfig(getShapeTextImageConfig(item))
 }
 
+function getGroupedCheckboxBoxConfig(item) {
+  return getGroupedChildConfig(getCheckboxBoxConfig(item))
+}
+
+function getCheckboxStyle(item) {
+  return getNormalizedCheckboxStyle(item?.checkboxStyle ?? item?.style)
+}
+
+function isCheckboxCircleStyle(item) {
+  return ['strikeCircle', 'circleDot'].includes(getCheckboxStyle(item))
+}
+
+function getCheckboxWidth(item) {
+  return Math.max(1, Number(item?.width) || 1)
+}
+
+function getCheckboxHeight(item) {
+  return Math.max(1, Number(item?.height) || 1)
+}
+
+function getCheckboxBorderWidth(item) {
+  return getBorderWidthValue(item?.borderWidth ?? defaultCheckboxSettings.borderWidth)
+}
+
+function getCheckboxMarkColor(item) {
+  return getHexColor(item?.markColor, defaultCheckboxSettings.markColor)
+}
+
+function getCheckboxFillColor(item) {
+  return getHexColor(item?.fill, defaultCheckboxSettings.fill)
+}
+
+function getCheckboxBoxConfig(item) {
+  return {
+    x: item.x,
+    y: item.y,
+    width: getCheckboxWidth(item),
+    height: getCheckboxHeight(item),
+    rotation: item.rotation || 0,
+    opacity: clampNumber(item.opacity ?? defaultCheckboxSettings.opacity, 0, 1),
+    draggable: item.draggable !== false,
+    ...getElementDragConstraintConfig(item)
+  }
+}
+
+function getCheckboxHitAreaConfig(item) {
+  return {
+    x: 0,
+    y: 0,
+    width: getCheckboxWidth(item),
+    height: getCheckboxHeight(item),
+    fill: 'rgba(0,0,0,0)'
+  }
+}
+
+function getCheckboxRectConfig(item) {
+  const borderWidth = getCheckboxBorderWidth(item)
+
+  return {
+    x: 0,
+    y: 0,
+    width: getCheckboxWidth(item),
+    height: getCheckboxHeight(item),
+    fill: getCheckboxFillColor(item),
+    stroke: getElementBorderColor(item),
+    strokeWidth: borderWidth,
+    visible: !isCheckboxCircleStyle(item),
+    listening: false,
+    perfectDrawEnabled: false,
+    ...getBorderLineConfig(item?.borderStyle, borderWidth)
+  }
+}
+
+function getCheckboxCircleConfig(item) {
+  const width = getCheckboxWidth(item)
+  const height = getCheckboxHeight(item)
+  const borderWidth = getCheckboxBorderWidth(item)
+
+  return {
+    x: width / 2,
+    y: height / 2,
+    radius: Math.max(1, (Math.min(width, height) - borderWidth) / 2),
+    fill: getCheckboxFillColor(item),
+    stroke: getElementBorderColor(item),
+    strokeWidth: borderWidth,
+    visible: isCheckboxCircleStyle(item),
+    listening: false,
+    perfectDrawEnabled: false,
+    ...getBorderLineConfig(item?.borderStyle, borderWidth)
+  }
+}
+
+function getCheckboxMarkLineConfigs(item) {
+  if (!getNormalizedCheckboxChecked(getCheckboxStateValue(item))) return []
+
+  const style = getCheckboxStyle(item)
+  const width = getCheckboxWidth(item)
+  const height = getCheckboxHeight(item)
+  const minSize = Math.max(1, Math.min(width, height))
+  const inset = Math.max(getCheckboxBorderWidth(item) + 4, minSize * 0.18)
+  const strokeWidth = Math.max(2, Math.round(minSize * 0.12))
+  const baseConfig = {
+    stroke: getCheckboxMarkColor(item),
+    strokeWidth,
+    lineCap: 'round',
+    lineJoin: 'round',
+    listening: false,
+    perfectDrawEnabled: false
+  }
+
+  if (style === 'cross') {
+    return [
+      {
+        id: `${item.id}-checkbox-cross-a`,
+        points: [inset, inset, width - inset, height - inset],
+        ...baseConfig
+      },
+      {
+        id: `${item.id}-checkbox-cross-b`,
+        points: [width - inset, inset, inset, height - inset],
+        ...baseConfig
+      }
+    ]
+  }
+
+  if (style === 'check' || style === 'rectCheck') {
+    return [{
+      id: `${item.id}-checkbox-check`,
+      points: [
+        width * 0.22,
+        height * 0.55,
+        width * 0.42,
+        height * 0.74,
+        width * 0.78,
+        height * 0.28
+      ],
+      ...baseConfig
+    }]
+  }
+
+  if (style === 'strikeRect' || style === 'strikeCircle') {
+    return [{
+      id: `${item.id}-checkbox-strike`,
+      points: [inset, height - inset, width - inset, inset],
+      ...baseConfig
+    }]
+  }
+
+  return []
+}
+
+function getCheckboxDotConfig(item) {
+  const style = getCheckboxStyle(item)
+  const visible = getNormalizedCheckboxChecked(getCheckboxStateValue(item)) &&
+    ['circleDot', 'rectDot'].includes(style)
+  const width = getCheckboxWidth(item)
+  const height = getCheckboxHeight(item)
+
+  return {
+    x: width / 2,
+    y: height / 2,
+    radius: Math.max(2, Math.min(width, height) * 0.18),
+    fill: getCheckboxMarkColor(item),
+    visible,
+    listening: false,
+    perfectDrawEnabled: false
+  }
+}
+
+function ensureCheckboxSettings(item) {
+  if (!item || item.type !== 'checkbox') return
+
+  item.checkboxStyle = getNormalizedCheckboxStyle(item.checkboxStyle ?? item.style)
+  item.checked = getNormalizedCheckboxChecked(getCheckboxStateValue(item), defaultCheckboxSettings.checked)
+  item.width = Math.max(8, Number(item.width) || 32)
+  item.height = Math.max(8, Number(item.height) || 32)
+  item.borderColor = getHexColor(item.borderColor, defaultCheckboxSettings.borderColor)
+  item.borderWidth = getBorderWidthValue(item.borderWidth ?? defaultCheckboxSettings.borderWidth)
+  item.borderStyle = getShapeBorderStyle(item.borderStyle)
+  item.markColor = getHexColor(item.markColor, defaultCheckboxSettings.markColor)
+  item.fill = getHexColor(item.fill, defaultCheckboxSettings.fill)
+  item.opacity = clampNumber(item.opacity ?? defaultCheckboxSettings.opacity, 0, 1)
+  if (item.templateVariable === undefined) item.templateVariable = ''
+}
+
 function ensureImageSettings(item) {
   if (!item || item.type !== 'image') return
 
@@ -4952,7 +5176,7 @@ function getFallbackElementPixelDimensions(item) {
 
   const rotation = Number(item.rotation) || 0
 
-  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group'].includes(item.type)) {
+  if (['text', 'image', 'rect', 'rightTriangle', 'chart', 'pieChart', 'table', 'group', 'checkbox'].includes(item.type)) {
     return {
       width: Math.max(0, Number(item.width) || 0),
       height: Math.max(0, Number(item.height) || 0),
@@ -5047,7 +5271,7 @@ function canEditElementDimensions(item) {
 function getEditableElementDimensions(item) {
   if (!canEditElementDimensions(item)) return null
 
-  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table' || item.type === 'checkbox') {
     return {
       width: Math.max(1, Number(item.width) || 1),
       height: Math.max(1, Number(item.height) || 1)
@@ -5153,7 +5377,7 @@ function setEditableElementDimension(item, dimension, value) {
   const currentDimensions = getEditableElementDimensions(item)
   const targetValue = getDimensionInputValue(value, currentDimensions?.[dimension])
 
-  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table') {
+  if (item.type === 'image' || item.type === 'rect' || item.type === 'rightTriangle' || item.type === 'table' || item.type === 'checkbox') {
     item[dimension] = targetValue
   } else if (item.type === 'circle' || regularPolygonShapeTypes.includes(item.type)) {
     item.radius = targetValue / 2
@@ -6225,6 +6449,7 @@ function getLayerItemTitle(item) {
   if (item.type === 'line') return `Line${getLayerTitleSuffix(item.shapeText)}`
   if (item.type === 'arrow') return 'Arrow'
   if (item.type === 'label') return `Label${getLayerTitleSuffix(item.text)}`
+  if (item.type === 'checkbox') return `Checkbox / ${item.checked ? 'checked' : 'unchecked'}`
   if (item.type === 'chart') return `Graph${getLayerTitleSuffix(item.chartTitle)}`
   if (item.type === 'pieChart') return `Pie Chart${getLayerTitleSuffix(item.chartTitle)}`
   if (item.type === 'table') return `Table (${item.rows || 0} x ${item.cols || 0})`
@@ -6876,6 +7101,7 @@ function ensureSelectableItemSettings(item) {
   ensurePieChartSettings(item)
   ensureTableSettings(item)
   ensureLabelSettings(item)
+  ensureCheckboxSettings(item)
   ensureElementBorderSettings(item)
   ensureShapeSettings(item)
 }
@@ -7864,7 +8090,7 @@ function updateTransform(e, id) {
     return
   }
 
-  if (el.type === 'image' || el.type === 'rect' || el.type === 'rightTriangle' || el.type === 'chart' || el.type === 'pieChart' || el.type === 'table') {
+  if (el.type === 'image' || el.type === 'rect' || el.type === 'rightTriangle' || el.type === 'chart' || el.type === 'pieChart' || el.type === 'table' || el.type === 'checkbox') {
     el.width = Math.max(10, node.width() * Math.abs(node.scaleX()))
     el.height = Math.max(10, node.height() * Math.abs(node.scaleY()))
     node.width(el.width)
@@ -8902,6 +9128,8 @@ function createImportedElementFromConfig(config) {
       return new ArrowElement(config)
     case 'label':
       return new LabelElement(config)
+    case 'checkbox':
+      return new CheckboxElement(config)
     case 'chart':
       return new ChartElement(config)
     case 'pieChart':
@@ -9274,6 +9502,8 @@ onBeforeUnmount(() => {
     defaultShapeSettings,
     defaultElementBorderSettings,
     borderStyleOptions,
+    checkboxStyleOptions,
+    defaultCheckboxSettings,
     defaultLineHitStrokeWidth,
     defaultShapeFills,
     defaultChartSettings,
@@ -9348,6 +9578,7 @@ onBeforeUnmount(() => {
     selectedImage,
     selectedChart,
     selectedPieChart,
+    selectedCheckbox,
     selectedShape,
     editingItem,
     tableCellEditorStyle,
@@ -9391,6 +9622,7 @@ onBeforeUnmount(() => {
     addLine,
     addArrow,
     addLabel,
+    addCheckbox,
     addPolygon,
     addChart,
     addPieChart,
@@ -9483,6 +9715,7 @@ onBeforeUnmount(() => {
     getGroupedImageContentConfig,
     getGroupedImageBorderConfig,
     getGroupedRectConfig,
+    getGroupedCheckboxBoxConfig,
     getGroupedChartBoxConfig,
     getGroupedChartBorderConfig,
     getGroupedPieChartBoxConfig,
@@ -9491,6 +9724,7 @@ onBeforeUnmount(() => {
     ensureChartSettings,
     ensurePieChartSettings,
     ensureLabelSettings,
+    ensureCheckboxSettings,
     ensureTextSettings,
     getNormalizedTextFontSize,
     getFontSizeValue,
@@ -9561,6 +9795,12 @@ onBeforeUnmount(() => {
     getRightTriangleConfig,
     getLineConfig,
     getArrowConfig,
+    getCheckboxBoxConfig,
+    getCheckboxHitAreaConfig,
+    getCheckboxRectConfig,
+    getCheckboxCircleConfig,
+    getCheckboxMarkLineConfigs,
+    getCheckboxDotConfig,
     getRichTextImageConfig,
     getImageBoxConfig,
     getImageHitAreaConfig,

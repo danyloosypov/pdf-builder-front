@@ -14,6 +14,7 @@ defineProps({
   getGroupedImageContentConfig: { type: Function, required: true },
   getGroupedImageBorderConfig: { type: Function, required: true },
   getGroupedRectConfig: { type: Function, required: true },
+  getGroupedCheckboxBoxConfig: { type: Function, required: true },
   getGroupedChildConfig: { type: Function, required: true },
   getGroupedChartBoxConfig: { type: Function, required: true },
   getGroupedChartBorderConfig: { type: Function, required: true },
@@ -35,6 +36,12 @@ defineProps({
   getRightTriangleConfig: { type: Function, required: true },
   getLineConfig: { type: Function, required: true },
   getArrowConfig: { type: Function, required: true },
+  getCheckboxBoxConfig: { type: Function, required: true },
+  getCheckboxHitAreaConfig: { type: Function, required: true },
+  getCheckboxRectConfig: { type: Function, required: true },
+  getCheckboxCircleConfig: { type: Function, required: true },
+  getCheckboxMarkLineConfigs: { type: Function, required: true },
+  getCheckboxDotConfig: { type: Function, required: true },
   getChartBoxConfig: { type: Function, required: true },
   getChartHitAreaConfig: { type: Function, required: true },
   getChartBorderConfig: { type: Function, required: true },
@@ -166,6 +173,21 @@ function emitTableResizeDragEnd(event, itemId, handle) {
           v-else-if="child.type === 'rect'"
           :config="getGroupedRectConfig(child)"
       />
+
+      <v-group
+          v-else-if="child.type === 'checkbox'"
+          :config="getGroupedCheckboxBoxConfig(child)"
+      >
+        <v-rect :config="getCheckboxHitAreaConfig(child)" />
+        <v-rect :config="getCheckboxRectConfig(child)" />
+        <v-circle :config="getCheckboxCircleConfig(child)" />
+        <v-line
+            v-for="line in getCheckboxMarkLineConfigs(child)"
+            :key="line.id"
+            :config="line"
+        />
+        <v-circle :config="getCheckboxDotConfig(child)" />
+      </v-group>
 
       <v-circle
           v-else-if="child.type === 'circle'"
@@ -311,6 +333,28 @@ function emitTableResizeDragEnd(event, itemId, handle) {
     <v-rect :config="getImageHitAreaConfig(item)" />
     <v-image :config="getImageContentConfig(item)" />
     <v-rect :config="getImageBorderConfig(item)" />
+  </v-group>
+
+  <v-group
+      v-else-if="item.type === 'checkbox'"
+      :ref="el => setRef(el, item.id)"
+      :config="getCheckboxBoxConfig(item)"
+      @mousedown="emit('selectable-pointer-down', $event, item.id)"
+      @touchstart="emit('selectable-pointer-down', $event, item.id)"
+      @contextmenu="emit('selectable-context-menu', $event, item.id)"
+      @click="emit('selectable-click', $event)"
+      @dragend="emit('position-update', $event, item.id)"
+      @transformend="emit('transform-update', $event, item.id)"
+  >
+    <v-rect :config="getCheckboxHitAreaConfig(item)" />
+    <v-rect :config="getCheckboxRectConfig(item)" />
+    <v-circle :config="getCheckboxCircleConfig(item)" />
+    <v-line
+        v-for="line in getCheckboxMarkLineConfigs(item)"
+        :key="line.id"
+        :config="line"
+    />
+    <v-circle :config="getCheckboxDotConfig(item)" />
   </v-group>
 
   <v-rect

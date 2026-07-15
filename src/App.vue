@@ -854,6 +854,18 @@ export default {
           </div>
 
           <div v-else class="element-tab-stack">
+            <div class="element-button-grid">
+              <button
+                  type="button"
+                  draggable="true"
+                  @click="addCheckbox"
+                  @dragstart="handleSidebarElementDragStart($event, 'checkbox')"
+                  @dragend="handleSidebarElementDragEnd"
+              >
+                Checkbox
+              </button>
+            </div>
+
             <div class="qr-panel">
               <label class="control-row">
                 <span>QR Link</span>
@@ -1179,6 +1191,68 @@ export default {
               step="1"
               @input="setElementRotation(selectedItem, $event.target.value)"
           >
+        </label>
+      </div>
+
+      <div v-if="selectedCheckbox" class="image-editor-panel">
+        <div class="panel-title">Checkbox Settings</div>
+
+        <label class="control-row">
+          <span>Variable</span>
+          <input
+              v-model.trim="selectedCheckbox.templateVariable"
+              class="chart-text-input"
+              type="text"
+              placeholder="is_active"
+          >
+        </label>
+
+        <label class="checkbox-control">
+          <input v-model="selectedCheckbox.checked" type="checkbox">
+          <span>Checked</span>
+        </label>
+
+        <label class="control-row">
+          <span>Style</span>
+          <select v-model="selectedCheckbox.checkboxStyle" class="control-select">
+            <option
+                v-for="option in checkboxStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <div class="chart-color-grid">
+          <label>
+            <span>Border</span>
+            <input v-model="selectedCheckbox.borderColor" type="color">
+          </label>
+          <label>
+            <span>Mark</span>
+            <input v-model="selectedCheckbox.markColor" type="color">
+          </label>
+        </div>
+
+        <label class="control-row">
+          <span>Border Width</span>
+          <input v-model.number="selectedCheckbox.borderWidth" type="range" min="0" max="24" step="1">
+          <input v-model.number="selectedCheckbox.borderWidth" class="number-input" type="number" min="0" max="24" step="1">
+        </label>
+
+        <label class="control-row">
+          <span>Border Style</span>
+          <select v-model="selectedCheckbox.borderStyle" class="control-select">
+            <option
+                v-for="option in borderStyleOptions"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
         </label>
       </div>
 
@@ -1993,6 +2067,7 @@ export default {
                   :get-grouped-image-content-config="getGroupedImageContentConfig"
                   :get-grouped-image-border-config="getGroupedImageBorderConfig"
                   :get-grouped-rect-config="getGroupedRectConfig"
+                  :get-grouped-checkbox-box-config="getGroupedCheckboxBoxConfig"
                   :get-grouped-child-config="getGroupedChildConfig"
                   :get-grouped-chart-box-config="getGroupedChartBoxConfig"
                   :get-grouped-chart-border-config="getGroupedChartBorderConfig"
@@ -2014,6 +2089,12 @@ export default {
                   :get-right-triangle-config="getRightTriangleConfig"
                   :get-line-config="getLineConfig"
                   :get-arrow-config="getArrowConfig"
+                  :get-checkbox-box-config="getCheckboxBoxConfig"
+                  :get-checkbox-hit-area-config="getCheckboxHitAreaConfig"
+                  :get-checkbox-rect-config="getCheckboxRectConfig"
+                  :get-checkbox-circle-config="getCheckboxCircleConfig"
+                  :get-checkbox-mark-line-configs="getCheckboxMarkLineConfigs"
+                  :get-checkbox-dot-config="getCheckboxDotConfig"
                   :get-chart-box-config="getChartBoxConfig"
                   :get-chart-hit-area-config="getChartHitAreaConfig"
                   :get-chart-border-config="getChartBorderConfig"
