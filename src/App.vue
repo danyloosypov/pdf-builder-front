@@ -580,6 +580,7 @@ export default {
                   v-for="option in getBandTypeOptionsForGroup(group.id)"
                   :key="option.value"
                   :value="option.value"
+                  :disabled="isBandTypeUnavailable(option.value)"
               >
                 {{ option.label }}
               </option>
@@ -587,7 +588,12 @@ export default {
           </select>
         </label>
 
-        <button type="button" class="band-add-button" @click="addBand()">
+        <button
+            type="button"
+            class="band-add-button"
+            :disabled="!canAddBandType()"
+            @click="addBand()"
+        >
           Add Band
         </button>
 
@@ -634,6 +640,7 @@ export default {
                     v-for="option in getBandTypeOptionsForGroup(group.id)"
                     :key="option.value"
                     :value="option.value"
+                    :disabled="isBandTypeUnavailable(option.value, activeBand)"
                 >
                   {{ option.label }}
                 </option>
@@ -654,6 +661,41 @@ export default {
                 @input="setBandHeight(activeBand, $event.target.value)"
             >
           </label>
+
+          <label class="checkbox-control">
+            <input
+                :checked="getBandInsideCanvasBorders(activeBand)"
+                type="checkbox"
+                @change="setBandInsideCanvasBorders(activeBand, $event.target.checked)"
+            >
+            <span>Inside canvas borders</span>
+          </label>
+
+          <div class="band-column-grid">
+            <label>
+              <span>Columns</span>
+              <input
+                  :value="getBandColumnCount(activeBand)"
+                  type="number"
+                  min="1"
+                  max="12"
+                  step="1"
+                  @input="setBandColumnCount(activeBand, $event.target.value)"
+              >
+            </label>
+            <label>
+              <span>Gap (px)</span>
+              <input
+                  :value="getBandColumnGap(activeBand)"
+                  type="number"
+                  min="0"
+                  max="2000"
+                  step="1"
+                  :disabled="getBandColumnCount(activeBand) <= 1"
+                  @input="setBandColumnGap(activeBand, $event.target.value)"
+              >
+            </label>
+          </div>
 
           <label class="control-row">
             <span>Data Source</span>
@@ -693,14 +735,14 @@ export default {
           <div class="band-button-grid">
             <button
                 type="button"
-                :disabled="bands[0]?.id === activeBand.id"
+                :disabled="!canMoveBand(activeBand.id, -1)"
                 @click="moveBand(activeBand.id, -1)"
             >
               Up
             </button>
             <button
                 type="button"
-                :disabled="bands[bands.length - 1]?.id === activeBand.id"
+                :disabled="!canMoveBand(activeBand.id, 1)"
                 @click="moveBand(activeBand.id, 1)"
             >
               Down
@@ -1137,6 +1179,26 @@ export default {
                 :value="band.id"
             >
               {{ getBandTitle(band) }}
+            </option>
+          </select>
+        </label>
+
+        <label
+            v-if="getElementBandColumnOptions(selectedItem).length > 1"
+            class="control-row"
+        >
+          <span>Column</span>
+          <select
+              :value="getElementBandColumnIndex(selectedItem)"
+              class="control-select"
+              @change="setSelectedElementsBandColumn($event.target.value)"
+          >
+            <option
+                v-for="option in getElementBandColumnOptions(selectedItem)"
+                :key="option.value"
+                :value="option.value"
+            >
+              {{ option.label }}
             </option>
           </select>
         </label>
@@ -2047,6 +2109,11 @@ export default {
                   :key="guide.id"
               >
                 <v-rect :config="guide.rect" />
+                <v-rect
+                    v-for="column in guide.columns"
+                    :key="column.id"
+                    :config="column"
+                />
                 <v-text :config="guide.label" />
               </v-group>
 

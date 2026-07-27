@@ -127,6 +127,26 @@ export function usePdfBuilder() {
 let generatedPageIdCounter = 0
 let generatedBandIdCounter = 0
 const DEFAULT_BAND_TYPE = 'page-header'
+const MIN_BAND_COLUMN_COUNT = 1
+const MAX_BAND_COLUMN_COUNT = 12
+const MIN_BAND_COLUMN_WIDTH = 12
+const DEFAULT_BAND_COLUMN_SETTINGS = {
+  count: 1,
+  gap: 16
+}
+const SINGLETON_BAND_TYPES = new Set([
+  'document-header',
+  'document-footer',
+  'page-header',
+  'page-footer'
+])
+const BAND_ORDER_RANKS = {
+  'document-header': 0,
+  'page-header': 1,
+  'page-footer': 3,
+  'document-footer': 4
+}
+const DEFAULT_BAND_ORDER_RANK = 2
 const MIN_PAGE_COLUMN_COUNT = 1
 const MAX_PAGE_COLUMN_COUNT = 12
 const MIN_PAGE_COLUMN_WIDTH_INCHES = 0.1
@@ -214,6 +234,32 @@ function getNormalizedBandHeight(value, type = DEFAULT_BAND_TYPE) {
   return clampNumber(Math.round(height), 12, 2000)
 }
 
+function getNormalizedBandColumnCount(value) {
+  return clampNumber(
+    Math.round(Number(value) || DEFAULT_BAND_COLUMN_SETTINGS.count),
+    MIN_BAND_COLUMN_COUNT,
+    MAX_BAND_COLUMN_COUNT
+  )
+}
+
+function getNormalizedBandColumnGap(value) {
+  return clampNumber(Math.round(Number(value) || 0), 0, 2000)
+}
+
+function getNormalizedBandColumnSettings(settings = {}) {
+  const source = settings && typeof settings === 'object' ? settings : {}
+  const count = getNormalizedBandColumnCount(source.count ?? source.columnCount)
+  const gap = count > 1
+    ? getNormalizedBandColumnGap(source.gap ?? source.columnGap ?? source.gapPx)
+    : 0
+
+  return { count, gap }
+}
+
+function getNormalizedBandInsideCanvasBorders(value) {
+  return value === true || value === 'true' || value === 1 || value === '1'
+}
+
 function createDocumentBand(type = DEFAULT_BAND_TYPE, options = {}) {
   const normalizedType = getNormalizedBandType(type)
   const option = getBandTypeOption(normalizedType)
@@ -226,7 +272,14 @@ function createDocumentBand(type = DEFAULT_BAND_TYPE, options = {}) {
     height: getNormalizedBandHeight(options.height, normalizedType),
     dataSource: String(options.dataSource || ''),
     groupBy: String(options.groupBy || ''),
-    parentBandId: String(options.parentBandId || '')
+    parentBandId: String(options.parentBandId || ''),
+    columns: getNormalizedBandColumnSettings(options.columns || {
+      count: options.columnCount,
+      gap: options.columnGap
+    }),
+    insideCanvasBorders: getNormalizedBandInsideCanvasBorders(
+      options.insideCanvasBorders ?? options.insideBorders
+    )
   }
 }
 
@@ -947,7 +1000,7 @@ function setPageColumnWidthInches(value) {
   setActivePageColumnSettings({ gapInches })
 }
 
-function getPageContentBoundsPixels() {
+function getPageContentBoundsPixels(config = pageConfig.value) {
   const margins = pageMarginsInches.value
   const left = Math.round(margins.left * PX_PER_INCH)
   const top = Math.round(margins.top * PX_PER_INCH)
@@ -955,10 +1008,10 @@ function getPageContentBoundsPixels() {
   const bottom = Math.round(margins.bottom * PX_PER_INCH)
 
   return {
-    x: pageConfig.value.x + left,
-    y: pageConfig.value.y + top,
-    width: Math.max(1, pageConfig.value.width - left - right),
-    height: Math.max(1, pageConfig.value.height - top - bottom)
+    x: config.x + left,
+    y: config.y + top,
+    width: Math.max(1, config.width - left - right),
+    height: Math.max(1, config.height - top - bottom)
   }
 }
 
@@ -1410,6 +1463,77 @@ function getBandTypeOptionsForGroup(groupId) {
   return bandTypeOptions.filter(option => option.group === groupId)
 }
 
+function isSingletonBandType(type) {
+  return SINGLETON_BAND_TYPES.has(getNormalizedBandType(type))
+}
+
+function getBandTypeConflict(type, currentBand = null) {
+  const normalizedType = getNormalizedBandType(type)
+  const currentBandId = String(currentBand?.id || '')
+
+  if (!isSingletonBandType(normalizedType)) return null
+
+  return bands.value.find(band => (
+    String(band?.type || '') === normalizedType &&
+    String(band?.id || '') !== currentBandId
+  )) || null
+}
+
+function isBandTypeUnavailable(type, currentBand = null) {
+  return Boolean(getBandTypeConflict(type, currentBand))
+}
+
+function getFirstAvailableBandType(currentBand = null) {
+  return bandTypeOptions.find(option => !isBandTypeUnavailable(option.value, currentBand))?.value || ''
+}
+
+function ensureNewBandTypeAvailable() {
+  if (!isBandTypeUnavailable(newBandType.value)) return
+
+  newBandType.value = getFirstAvailableBandType()
+}
+
+function canAddBandType(type = newBandType.value) {
+  return Boolean(getFirstAvailableBandType()) && !isBandTypeUnavailable(type)
+}
+
+function getBandOrderRank(bandOrType) {
+  const type = typeof bandOrType === 'string'
+    ? getNormalizedBandType(bandOrType)
+    : getNormalizedBandType(bandOrType?.type)
+
+  return BAND_ORDER_RANKS[type] ?? DEFAULT_BAND_ORDER_RANK
+}
+
+function getCanonicalBandOrder(bandList = []) {
+  return [...bandList]
+    .map((band, index) => ({ band, index }))
+    .sort((a, b) => (
+      getBandOrderRank(a.band) - getBandOrderRank(b.band) ||
+      a.index - b.index
+    ))
+    .map(entry => entry.band)
+}
+
+function haveSameBandOrder(a = [], b = []) {
+  return a.length === b.length &&
+    a.every((band, index) => String(band?.id || '') === String(b[index]?.id || ''))
+}
+
+function canMoveBand(bandId, direction) {
+  const index = bands.value.findIndex(band => band.id === bandId)
+  const nextIndex = index + direction
+
+  if (index < 0 || nextIndex < 0 || nextIndex >= bands.value.length) return false
+
+  const nextBands = [...bands.value]
+  const [band] = nextBands.splice(index, 1)
+
+  nextBands.splice(nextIndex, 0, band)
+
+  return !haveSameBandOrder(getCanonicalBandOrder(nextBands), bands.value)
+}
+
 function getBandTypeLabel(type) {
   return getBandTypeOption(type)?.label || 'Band'
 }
@@ -1440,6 +1564,218 @@ function getBandHeight(band) {
   return getNormalizedBandHeight(band?.height, band?.type)
 }
 
+function getBandInsideCanvasBorders(band) {
+  return getNormalizedBandInsideCanvasBorders(band?.insideCanvasBorders ?? band?.insideBorders)
+}
+
+function setBandInsideCanvasBorders(band, value) {
+  if (!band) return
+
+  const snapshots = getBandElementOffsetSnapshots()
+
+  band.insideCanvasBorders = getNormalizedBandInsideCanvasBorders(value)
+
+  restoreBandElementOffsetSnapshots(snapshots)
+  constrainElementsToBandBounds(band.id)
+  syncRepeatedBandElements()
+}
+
+function getBandColumnSettings(band, width = null) {
+  const columns = getNormalizedBandColumnSettings(band?.columns)
+
+  if (columns.count <= 1) return { count: 1, gap: 0 }
+  if (!Number.isFinite(width)) return columns
+
+  const maxGap = Math.max(
+    0,
+    (Math.max(1, Number(width) || 1) - columns.count * MIN_BAND_COLUMN_WIDTH) /
+      Math.max(1, columns.count - 1)
+  )
+
+  return {
+    count: columns.count,
+    gap: clampNumber(columns.gap, 0, maxGap)
+  }
+}
+
+function getBandColumnCount(band) {
+  return getBandColumnSettings(band).count
+}
+
+function getBandColumnGap(band) {
+  return getBandColumnSettings(band).gap
+}
+
+function getBandColumnSegments(segment) {
+  if (!segment) return []
+
+  const columns = getBandColumnSettings(segment.band, segment.width)
+
+  if (columns.count <= 1) {
+    return [{
+      ...segment,
+      columnIndex: 0,
+      columnCount: 1
+    }]
+  }
+
+  const columnWidth = Math.max(
+    1,
+    (segment.width - columns.gap * (columns.count - 1)) / columns.count
+  )
+
+  return Array.from({ length: columns.count }, (_, index) => ({
+    ...segment,
+    id: `${segment.band.id}-${segment.kind}-column-${index}`,
+    columnIndex: index,
+    columnCount: columns.count,
+    x: segment.x + index * (columnWidth + columns.gap),
+    width: columnWidth
+  }))
+}
+
+function getBandColumnIndexForX(band, pageIndex, x) {
+  const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+  const columns = getBandColumnSegments(segment)
+
+  if (columns.length <= 1) return 0
+
+  const targetX = Number(x) || 0
+  const containingColumn = columns.find(column => (
+    targetX >= column.x &&
+    targetX <= column.x + column.width
+  ))
+
+  if (containingColumn) return containingColumn.columnIndex
+
+  return columns.reduce((bestIndex, column, index) => {
+    const bestColumn = columns[bestIndex]
+    const bestDistance = Math.abs(targetX - (bestColumn.x + bestColumn.width / 2))
+    const distance = Math.abs(targetX - (column.x + column.width / 2))
+
+    return distance < bestDistance ? index : bestIndex
+  }, 0)
+}
+
+function getBandColumnIndexForElementPosition(item, band, pageIndex = activePageIndex.value, node = null) {
+  const rect = node?.getClientRect
+    ? node.getClientRect()
+    : getFallbackElementRectForPosition(item, {
+      x: getItemCoordinate(item, 'x'),
+      y: getItemCoordinate(item, 'y')
+    })
+
+  return getBandColumnIndexForX(band, pageIndex, rect.x + rect.width / 2)
+}
+
+function getBandColumnIndexForBand(band, value, pageIndex = activePageIndex.value) {
+  const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+  const columnCount = segment
+    ? getBandColumnSegments(segment).length
+    : getBandColumnCount(band)
+
+  return clampNumber(
+    Math.round(Number(value) || 0),
+    0,
+    Math.max(0, columnCount - 1)
+  )
+}
+
+function getElementBandColumnIndex(item, pageIndex = activePageIndex.value) {
+  const band = getBandById(item?.bandId)
+
+  return getBandColumnIndexForBand(band, item?.bandColumnIndex, pageIndex)
+}
+
+function getElementBandColumnOptions(item) {
+  const band = getBandById(item?.bandId)
+  const itemInfo = getPageElementInfo(item)
+  const pageIndex = itemInfo?.pageIndex ?? activePageIndex.value
+  const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+  const columnCount = segment
+    ? getBandColumnSegments(segment).length
+    : getBandColumnCount(band)
+
+  return Array.from({ length: columnCount }, (_, index) => ({
+    value: index,
+    label: `Column ${index + 1}`
+  }))
+}
+
+function clampBandElementColumnIndexes(bandId = '') {
+  const targetBandId = String(bandId || '')
+
+  pages.value.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      if (!item?.bandId) return
+      if (targetBandId && String(item.bandId) !== targetBandId) return
+
+      const band = getBandById(item.bandId)
+
+      item.bandColumnIndex = getBandColumnIndexForBand(band, item.bandColumnIndex, pageIndex)
+    })
+  })
+}
+
+function assignBandElementColumnsFromPosition(bandId = '') {
+  const targetBandId = String(bandId || '')
+
+  pages.value.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      if (!item?.bandId) return
+      if (targetBandId && String(item.bandId) !== targetBandId) return
+
+      const band = getBandById(item.bandId)
+      const node = pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
+
+      item.bandColumnIndex = getBandColumnIndexForElementPosition(item, band, pageIndex, node)
+    })
+  })
+}
+
+function updateBandColumns(band, attrs = {}) {
+  if (!band) return
+
+  const currentColumns = getNormalizedBandColumnSettings(band.columns)
+  const nextCount = attrs.count === undefined
+    ? currentColumns.count
+    : getNormalizedBandColumnCount(attrs.count)
+  const nextGapSource = attrs.gap === undefined
+    ? currentColumns.count <= 1 && nextCount > 1
+      ? DEFAULT_BAND_COLUMN_SETTINGS.gap
+      : currentColumns.gap
+    : attrs.gap
+  const shouldAssignFromPosition = currentColumns.count <= 1 && nextCount > 1
+  const snapshots = shouldAssignFromPosition ? [] : getBandElementOffsetSnapshots()
+
+  band.columns = {
+    count: nextCount,
+    gap: nextCount > 1 ? getNormalizedBandColumnGap(nextGapSource) : 0
+  }
+
+  if (shouldAssignFromPosition) {
+    assignBandElementColumnsFromPosition(band.id)
+  } else {
+    clampBandElementColumnIndexes(band.id)
+    restoreBandElementOffsetSnapshots(snapshots)
+  }
+
+  constrainElementsToBandBounds(band.id)
+  syncRepeatedBandElements()
+}
+
+function setBandColumnCount(band, value) {
+  updateBandColumns(band, { count: value })
+}
+
+function setBandColumnGap(band, value) {
+  updateBandColumns(band, { gap: value })
+}
+
 function getBandElementOffsetSnapshots() {
   const snapshots = []
 
@@ -1447,15 +1783,14 @@ function getBandElementOffsetSnapshots() {
     if (!Array.isArray(page?.elements)) return
 
     page.elements.forEach(item => {
-      const band = getBandById(item?.bandId)
-      const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+      const segment = getElementBandSegment(item, pageIndex)
 
       if (!segment) return
 
       snapshots.push({
         pageId: page.id,
         elementId: item.id,
-        bandId: band.id,
+        bandId: segment.band.id,
         offsetX: getItemCoordinate(item, 'x') - segment.x,
         offsetY: getItemCoordinate(item, 'y') - segment.y
       })
@@ -1472,10 +1807,9 @@ function restoreBandElementOffsetSnapshots(snapshots = []) {
     const item = Array.isArray(page?.elements)
       ? page.elements.find(element => String(element.id) === String(snapshot.elementId))
       : null
-    const band = getBandById(snapshot.bandId)
-    const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
+    const segment = getElementBandSegment(item, pageIndex)
 
-    if (!item || !segment) return
+    if (!item || !segment || String(item.bandId || '') !== String(snapshot.bandId || '')) return
 
     item.x = segment.x + snapshot.offsetX
     item.y = segment.y + snapshot.offsetY
@@ -1521,8 +1855,11 @@ function getBandListMeta(band) {
   const total = getBandElementCount(band?.id)
   const onPage = getBandElementCount(band?.id, { activePageOnly: true })
   const height = getBandPlacement(band) === 'full' ? 'full page' : `${getBandHeight(band)}px`
+  const columnCount = getBandColumnCount(band)
+  const columnMeta = columnCount > 1 ? ` / ${columnCount} col` : ''
+  const borderMeta = getBandInsideCanvasBorders(band) ? ' / inside' : ''
 
-  return `${getBandTypeLabel(band?.type)} / ${height} / ${onPage}/${total} item${total === 1 ? '' : 's'}`
+  return `${getBandTypeLabel(band?.type)} / ${height}${columnMeta}${borderMeta} / ${onPage}/${total} item${total === 1 ? '' : 's'}`
 }
 
 function isBandVisibleOnPage(band, pageIndex = activePageIndex.value, pageCount = pages.value.length) {
@@ -1549,10 +1886,18 @@ function normalizeBandForStorage(band, usedIds = new Set()) {
 }
 
 function addBand(type = newBandType.value) {
+  if (!canAddBandType(type)) {
+    ensureNewBandTypeAvailable()
+    return
+  }
+
+  const snapshots = getBandElementOffsetSnapshots()
   const band = createDocumentBand(type)
 
-  bands.value.push(band)
+  bands.value = getCanonicalBandOrder([...bands.value, band])
   activeBandId.value = band.id
+  restoreBandElementOffsetSnapshots(snapshots)
+  ensureNewBandTypeAvailable()
 }
 
 function selectBand(bandId) {
@@ -1562,9 +1907,12 @@ function selectBand(bandId) {
 function setBandType(band, type) {
   if (!band) return
 
+  const nextType = getNormalizedBandType(type)
+
+  if (isBandTypeUnavailable(nextType, band)) return
+
   const snapshots = getBandElementOffsetSnapshots()
   const previousTypeLabel = getBandTypeLabel(band.type)
-  const nextType = getNormalizedBandType(type)
   const nextTypeLabel = getBandTypeLabel(nextType)
   const shouldRename = !String(band.name || '').trim() || band.name === previousTypeLabel
 
@@ -1577,7 +1925,9 @@ function setBandType(band, type) {
     clearRepeatedBandMetadataForBand(band.id)
   }
 
+  bands.value = getCanonicalBandOrder(bands.value)
   restoreBandElementOffsetSnapshots(snapshots)
+  ensureNewBandTypeAvailable()
   syncRepeatedBandElements()
 }
 
@@ -1586,6 +1936,8 @@ function setBandHeight(band, value) {
 }
 
 function moveBand(bandId, direction) {
+  if (!canMoveBand(bandId, direction)) return
+
   const snapshots = getBandElementOffsetSnapshots()
   const index = bands.value.findIndex(band => band.id === bandId)
   const nextIndex = index + direction
@@ -1596,7 +1948,7 @@ function moveBand(bandId, direction) {
   const [band] = nextBands.splice(index, 1)
 
   nextBands.splice(nextIndex, 0, band)
-  bands.value = nextBands
+  bands.value = getCanonicalBandOrder(nextBands)
   restoreBandElementOffsetSnapshots(snapshots)
   syncRepeatedBandElements()
 }
@@ -1609,6 +1961,7 @@ function clearBandFromElements(bandId) {
   getAllPageElements().forEach(item => {
     if (String(item?.bandId || '') === id) {
       item.bandId = ''
+      item.bandColumnIndex = 0
       clearRepeatedBandElementMetadata(item)
     }
   })
@@ -1634,6 +1987,7 @@ function deleteBand(bandId = activeBandId.value) {
   clearBandFromElements(bandId)
   bands.value.splice(index, 1)
   activeBandId.value = bands.value[Math.min(index, bands.value.length - 1)]?.id || ''
+  ensureNewBandTypeAvailable()
   syncRepeatedBandElements()
 }
 
@@ -1648,24 +2002,54 @@ function setSelectedElementsBand(bandId) {
   const nextBandId = nextBand ? nextBand.id : ''
 
   selectedItems.value.forEach(item => {
+    const itemInfo = getPageElementInfo(item)
+    const pageIndex = itemInfo?.pageIndex ?? activePageIndex.value
+    const node = pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
+
     item.bandId = nextBandId
+    item.bandColumnIndex = nextBand
+      ? getBandColumnIndexForElementPosition(item, nextBand, pageIndex, node)
+      : 0
 
     if (isBandSyncedAcrossPages(nextBand)) {
-      const itemInfo = getPageElementInfo(item)
-      const sourceSegment = getBandSegmentForPageIndex(nextBand, itemInfo?.pageIndex ?? activePageIndex.value)
+      const sourceSegment = getElementBandSegment(item, pageIndex)
 
       ensureRepeatedBandMasterMetadata(item, itemInfo?.page || activePage.value, sourceSegment)
     } else {
       clearRepeatedBandElementMetadata(item)
     }
 
-    const itemInfo = getPageElementInfo(item)
-    const node = itemInfo?.pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
-
-    constrainElementToBand(item, itemInfo?.pageIndex ?? activePageIndex.value, node)
+    constrainElementToBand(item, pageIndex, node)
   })
 
   syncRepeatedBandElements()
+}
+
+function setSelectedElementsBandColumn(value) {
+  const snapshots = getBandElementOffsetSnapshots()
+
+  selectedItems.value.forEach(item => {
+    const itemInfo = getPageElementInfo(item)
+    const pageIndex = itemInfo?.pageIndex ?? activePageIndex.value
+    const band = getBandById(item?.bandId)
+
+    if (!band) return
+
+    item.bandColumnIndex = getBandColumnIndexForBand(band, value, pageIndex)
+  })
+
+  restoreBandElementOffsetSnapshots(snapshots)
+
+  selectedItems.value.forEach(item => {
+    const itemInfo = getPageElementInfo(item)
+    const pageIndex = itemInfo?.pageIndex ?? activePageIndex.value
+    const node = pageIndex === activePageIndex.value ? nodeRefs.value[item.id] : null
+
+    constrainElementToBand(item, pageIndex, node)
+  })
+
+  syncRepeatedBandElements()
+  updateTransformerSelection()
 }
 
 function assignSelectedElementsToActiveBand() {
@@ -1689,10 +2073,11 @@ function applyImportedBands(importedBands = [], importedActiveBandId = '') {
       .map(band => normalizeBandForStorage(band, usedIds))
     : []
 
-  bands.value = nextBands
+  bands.value = getCanonicalBandOrder(nextBands)
   activeBandId.value = nextBands.some(band => band.id === importedActiveBandId)
     ? importedActiveBandId
-    : nextBands[0]?.id || ''
+    : bands.value[0]?.id || ''
+  ensureNewBandTypeAvailable()
 }
 
 function getImportedBands(data) {
@@ -1721,6 +2106,22 @@ function createBandGuideConfig(band, segment, index) {
   const color = getBandColor(band)
   const isActive = String(activeBandId.value) === String(band.id)
   const label = `${getBandTitle(band, index)} - ${getBandTypeLabel(band.type)}`
+  const columnSegments = getBandColumnSegments(segment)
+  const columnGuides = columnSegments.length > 1
+    ? columnSegments.map(column => ({
+      id: `${band.id}-${segment.kind}-column-${column.columnIndex}-guide`,
+      x: column.x,
+      y: column.y,
+      width: column.width,
+      height: column.height,
+      fill: getRgbaColor(color, isActive ? 0.06 : 0.025),
+      stroke: color,
+      strokeWidth: 1,
+      dash: [3, 4],
+      listening: false,
+      perfectDrawEnabled: false
+    }))
+    : []
 
   return {
     id: `${band.id}-${segment.kind}-guide`,
@@ -1749,7 +2150,8 @@ function createBandGuideConfig(band, segment, index) {
       fontStyle: isActive ? 'bold' : 'normal',
       listening: false,
       perfectDrawEnabled: false
-    }
+    },
+    columns: columnGuides
   }
 }
 
@@ -1763,6 +2165,14 @@ function getPageConfigForPageIndex(pageIndex = activePageIndex.value) {
     x: PAGE_OFFSET_X,
     y: PAGE_OFFSET_Y
   }
+}
+
+function getBandBoundsForPageIndex(pageIndex = activePageIndex.value, band = null) {
+  const page = getPageConfigForPageIndex(pageIndex)
+
+  return getBandInsideCanvasBorders(band)
+    ? getPageContentBoundsPixels(page)
+    : page
 }
 
 function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
@@ -1779,59 +2189,83 @@ function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
   let bottomY = page.y + page.height
 
   fullBands.forEach(band => {
+    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+
     segments.push({
       band,
       kind: 'full',
-      x: page.x,
-      y: page.y,
-      width: page.width,
-      height: page.height
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height
     })
   })
 
   topBands.forEach(band => {
-    const height = Math.min(getBandHeight(band), Math.max(12, bottomY - topY))
+    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const y = Math.max(topY, bounds.y)
+    const limit = Math.min(bottomY, bounds.y + bounds.height)
+    const availableHeight = Math.max(0, limit - y)
+
+    if (availableHeight <= 0) return
+
+    const height = Math.min(getBandHeight(band), availableHeight)
 
     segments.push({
       band,
       kind: 'top',
-      x: page.x,
-      y: topY,
-      width: page.width,
+      x: bounds.x,
+      y,
+      width: bounds.width,
       height
     })
 
-    topY += height
+    topY = y + height
   })
 
   bottomBands.forEach(band => {
-    const height = Math.min(getBandHeight(band), Math.max(12, bottomY - topY))
+    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const limit = Math.max(topY, bounds.y)
+    const bottom = Math.min(bottomY, bounds.y + bounds.height)
+    const availableHeight = Math.max(0, bottom - limit)
 
-    bottomY -= height
+    if (availableHeight <= 0) return
+
+    const height = Math.min(getBandHeight(band), availableHeight)
+    const y = bottom - height
+
     segments.push({
       band,
       kind: 'bottom',
-      x: page.x,
-      y: bottomY,
-      width: page.width,
+      x: bounds.x,
+      y,
+      width: bounds.width,
       height
     })
+
+    bottomY = y
   })
 
   bodyBands.forEach(band => {
-    const availableHeight = Math.max(12, bottomY - topY)
+    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const y = Math.max(topY, bounds.y)
+    const limit = Math.min(bottomY, bounds.y + bounds.height)
+    const availableHeight = Math.max(0, limit - y)
+
+    if (availableHeight <= 0) return
+
     const height = Math.min(getBandHeight(band), availableHeight)
 
     segments.push({
       band,
       kind: 'body',
-      x: page.x,
-      y: topY,
-      width: page.width,
+      x: bounds.x,
+      y,
+      width: bounds.width,
       height
     })
 
-    topY += height
+    topY = y + height
   })
 
   return segments
@@ -1854,13 +2288,13 @@ function getBandResizeDirection(segment) {
 }
 
 function getBandResizeMaxHeight(segment, pageIndex = activePageIndex.value) {
-  const page = getPageConfigForPageIndex(pageIndex)
+  const bounds = getBandBoundsForPageIndex(pageIndex, segment?.band)
 
   if (segment.kind === 'bottom') {
-    return Math.max(12, segment.y + segment.height - page.y)
+    return Math.max(12, segment.y + segment.height - bounds.y)
   }
 
-  return Math.max(12, page.y + page.height - segment.y)
+  return Math.max(12, bounds.y + bounds.height - segment.y)
 }
 
 function isBandResizeHandleVisible(segment) {
@@ -2020,8 +2454,14 @@ function getBandSegmentForPageIndex(band, pageIndex) {
 
 function getElementBandSegment(item, pageIndex = activePageIndex.value) {
   const band = getBandById(item?.bandId)
+  const segment = band ? getBandSegmentForPageIndex(band, pageIndex) : null
 
-  return band ? getBandSegmentForPageIndex(band, pageIndex) : null
+  if (!segment) return null
+
+  const columns = getBandColumnSegments(segment)
+  const columnIndex = getBandColumnIndexForBand(band, item?.bandColumnIndex, pageIndex)
+
+  return columns[columnIndex] || segment
 }
 
 function getConstraintBoundsFromSegment(segment) {
@@ -2336,7 +2776,7 @@ function getRepeatedBandMasterEntries() {
 
       if (!isBandSyncedAcrossPages(band)) return
 
-      const sourceSegment = getBandSegmentForPageIndex(band, pageIndex)
+      const sourceSegment = getElementBandSegment(item, pageIndex)
 
       if (!sourceSegment) return
 
@@ -2363,7 +2803,7 @@ function syncRepeatedBandMasterEntry(entry, expectedCloneKeys, usedIds) {
 
     if (!targetPage || targetPage.id === entry.page.id) return
 
-    const targetSegment = getBandSegmentForPageIndex(entry.band, pageIndex)
+    const targetSegment = getElementBandSegment(entry.item, pageIndex)
 
     if (!targetSegment) return
 
@@ -7090,6 +7530,7 @@ function ensureElementBandSettings(item) {
   if (item.bandId === undefined) item.bandId = ''
 
   item.bandId = String(item.bandId || '').trim()
+  item.bandColumnIndex = Math.max(0, Math.round(Number(item.bandColumnIndex) || 0))
 }
 
 function ensureSelectableItemSettings(item) {
@@ -9537,26 +9978,38 @@ onBeforeUnmount(() => {
     deletePage,
     renamePage,
     getBandTypeOptionsForGroup,
+    isBandTypeUnavailable,
+    canAddBandType,
     getBandTypeLabel,
     getBandTitle,
     getBandScopeLabel,
     getBandPlacement,
+    getBandInsideCanvasBorders,
+    getBandColumnCount,
+    getBandColumnGap,
     getBandElementCount,
     getBandListMeta,
     addBand,
     selectBand,
     setBandType,
     setBandHeight,
+    setBandInsideCanvasBorders,
+    setBandColumnCount,
+    setBandColumnGap,
     setBandResizeCursor,
     clearBandResizeCursor,
     handleBandResizePointerDown,
     startBandResizeDrag,
     resizeBandFromHandleDrag,
     finishBandResizeDrag,
+    canMoveBand,
     moveBand,
     deleteBand,
     getElementBandId,
+    getElementBandColumnIndex,
+    getElementBandColumnOptions,
     setSelectedElementsBand,
+    setSelectedElementsBandColumn,
     assignSelectedElementsToActiveBand,
     tableItems,
     selectedItems,
