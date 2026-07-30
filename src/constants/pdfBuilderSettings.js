@@ -27,8 +27,7 @@ export const bandTypeGroups = [
   { id: 'page', label: 'Page Bands' },
   { id: 'data', label: 'Data Bands' },
   { id: 'group', label: 'Group Bands' },
-  { id: 'support', label: 'Support Bands' },
-  { id: 'table', label: 'Table Bands' }
+  { id: 'support', label: 'Support Bands' }
 ]
 
 export const bandTypeOptions = [
@@ -37,22 +36,14 @@ export const bandTypeOptions = [
   { value: 'no-data', label: 'No Data Band', group: 'document', placement: 'body', scope: 'when-empty', defaultHeight: 96, color: '#64748b' },
   { value: 'page-header', label: 'Page Header', group: 'page', placement: 'top', scope: 'every-page', defaultHeight: 64, color: '#0f766e' },
   { value: 'page-footer', label: 'Page Footer', group: 'page', placement: 'bottom', scope: 'every-page', defaultHeight: 64, color: '#0f766e' },
-  { value: 'master-data', label: 'Master Data Band', group: 'data', placement: 'body', scope: 'master-records', defaultHeight: 80, color: '#15803d' },
+  { value: 'data', label: 'Data Band', group: 'data', placement: 'body', scope: 'records', defaultHeight: 80, color: '#15803d' },
   { value: 'data-header', label: 'Data Header', group: 'data', placement: 'body', scope: 'before-data', defaultHeight: 48, color: '#65a30d' },
   { value: 'data-footer', label: 'Data Footer', group: 'data', placement: 'body', scope: 'after-data', defaultHeight: 48, color: '#65a30d' },
-  { value: 'detail-header', label: 'Detail Header', group: 'data', placement: 'body', scope: 'before-detail', defaultHeight: 44, color: '#84cc16' },
-  { value: 'detail-footer', label: 'Detail Footer', group: 'data', placement: 'body', scope: 'after-detail', defaultHeight: 44, color: '#84cc16' },
   { value: 'group-header', label: 'Group Header', group: 'group', placement: 'body', scope: 'group-start', defaultHeight: 52, color: '#db2777' },
   { value: 'group-footer', label: 'Group Footer', group: 'group', placement: 'body', scope: 'group-end', defaultHeight: 52, color: '#db2777' },
-  { value: 'nested-group-header', label: 'Nested Group Header', group: 'group', placement: 'body', scope: 'nested-group-start', defaultHeight: 44, color: '#be185d' },
-  { value: 'nested-group-footer', label: 'Nested Group Footer', group: 'group', placement: 'body', scope: 'nested-group-end', defaultHeight: 44, color: '#be185d' },
-  { value: 'child', label: 'Child Band', group: 'support', placement: 'body', scope: 'after-parent', defaultHeight: 48, color: '#475569' },
-  { value: 'continuation', label: 'Continuation Band', group: 'support', placement: 'top', scope: 'continued-page', defaultHeight: 44, color: '#475569' },
+  { value: 'continuation', label: 'Continuation Band', group: 'support', placement: 'body', scope: 'continued-page', defaultHeight: 44, color: '#475569' },
   { value: 'break', label: 'Break Band', group: 'support', placement: 'body', scope: 'page-or-column-break', defaultHeight: 24, color: '#dc2626' },
-  { value: 'spacer', label: 'Spacer Band', group: 'support', placement: 'body', scope: 'spacing', defaultHeight: 36, color: '#64748b' },
-  { value: 'table-header', label: 'Table Header Band', group: 'table', placement: 'body', scope: 'table-header', defaultHeight: 44, color: '#7c2d12' },
-  { value: 'table-detail', label: 'Table Detail Band', group: 'table', placement: 'body', scope: 'table-row', defaultHeight: 44, color: '#9a3412' },
-  { value: 'table-footer', label: 'Table Footer Band', group: 'table', placement: 'body', scope: 'table-footer', defaultHeight: 44, color: '#7c2d12' }
+  { value: 'spacer', label: 'Spacer Band', group: 'support', placement: 'body', scope: 'spacing', defaultHeight: 36, color: '#64748b' }
 ]
 
 export const sidebarElementTabs = [
@@ -96,6 +87,30 @@ export const defaultTextSettings = {
   fontSize: 20,
   lineHeight: 1.35,
   letterSpacing: 0
+}
+
+export const aggregateFunctionOptions = [
+  { label: 'COUNT', value: 'COUNT' },
+  { label: 'SUM', value: 'SUM' },
+  { label: 'AVG', value: 'AVG' },
+  { label: 'MIN', value: 'MIN' },
+  { label: 'MAX', value: 'MAX' }
+]
+
+export const aggregateScopeOptions = [
+  { label: 'Auto', value: 'auto' },
+  { label: 'Document', value: 'document' },
+  { label: 'Current Band', value: 'band' },
+  { label: 'Current Group', value: 'group' },
+  { label: 'Parent Band', value: 'parent' }
+]
+
+export const defaultAggregateSettings = {
+  enabled: false,
+  function: 'COUNT',
+  scope: 'auto',
+  dataSource: '',
+  field: ''
 }
 
 export const defaultTableCellSettings = {

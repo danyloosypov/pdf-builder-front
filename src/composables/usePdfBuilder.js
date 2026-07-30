@@ -22,6 +22,8 @@ import {
   PAGE_STAGE_PADDING_Y,
   PX_PER_INCH,
   SIDEBAR_ELEMENT_DRAG_TYPE,
+  aggregateFunctionOptions,
+  aggregateScopeOptions,
   bandTypeGroups,
   bandTypeOptions,
   borderStyleOptions,
@@ -29,6 +31,7 @@ import {
   checkboxStyleOptions,
   cornerRadiusFields,
   defaultCheckboxSettings,
+  defaultAggregateSettings,
   defaultChartSettings,
   defaultElementBorderSettings,
   defaultImageSettings,
@@ -118,7 +121,8 @@ import {
   applyTemplateVariablesToElements,
   canElementHaveTemplateVariable,
   getTemplateVariablesFromElements,
-  normalizeTemplateValuesPayload
+  normalizeTemplateValuesPayload,
+  setTemplateTextValue
 } from '../utils/templateVariables'
 import { getNormalizedQRLink } from '../utils/qr'
 
@@ -137,9 +141,23 @@ const DEFAULT_BAND_COLUMN_SETTINGS = {
 const SINGLETON_BAND_TYPES = new Set([
   'document-header',
   'document-footer',
+  'no-data',
   'page-header',
   'page-footer'
 ])
+const LEGACY_BAND_TYPE_ALIASES = {
+  'data-band': 'data',
+  'master-data': 'data',
+  'detail-data': 'data',
+  'table-detail': 'data',
+  'child': 'data',
+  'detail-header': 'data-header',
+  'table-header': 'data-header',
+  'detail-footer': 'data-footer',
+  'table-footer': 'data-footer',
+  'nested-group-header': 'group-header',
+  'nested-group-footer': 'group-footer'
+}
 const BAND_ORDER_RANKS = {
   'document-header': 0,
   'page-header': 1,
@@ -215,9 +233,9 @@ function getNormalizedBandType(value) {
   const type = String(value || '').trim()
 
   if (bandTypeOptions.some(option => option.value === type)) return type
+  if (LEGACY_BAND_TYPE_ALIASES[type]) return LEGACY_BAND_TYPE_ALIASES[type]
   if (type.endsWith('-footer')) return 'page-footer'
   if (type.endsWith('-header')) return 'page-header'
-  if (['data-band', 'detail-data'].includes(type)) return 'master-data'
 
   return DEFAULT_BAND_TYPE
 }
@@ -263,6 +281,7 @@ function getNormalizedBandInsideCanvasBorders(value) {
 function createDocumentBand(type = DEFAULT_BAND_TYPE, options = {}) {
   const normalizedType = getNormalizedBandType(type)
   const option = getBandTypeOption(normalizedType)
+  const parentDataBandId = String(options.parentDataBandId ?? options.parentBandId ?? '')
 
   return {
     id: String(options.id || createBandId()),
@@ -272,7 +291,8 @@ function createDocumentBand(type = DEFAULT_BAND_TYPE, options = {}) {
     height: getNormalizedBandHeight(options.height, normalizedType),
     dataSource: String(options.dataSource || ''),
     groupBy: String(options.groupBy || ''),
-    parentBandId: String(options.parentBandId || ''),
+    parentDataBandId,
+    parentBandId: parentDataBandId,
     columns: getNormalizedBandColumnSettings(options.columns || {
       count: options.columnCount,
       gap: options.columnGap
@@ -445,7 +465,27 @@ const activePageId = ref(pages.value[0].id)
 const bands = ref([])
 const activeBandId = ref('')
 const newBandType = ref('page-header')
+const CANVAS_MODE_DESIGN = 'design'
+const CANVAS_MODE_PREVIEW = 'preview'
+const canvasModeOptions = [
+  { value: CANVAS_MODE_DESIGN, label: 'Design' },
+  { value: CANVAS_MODE_PREVIEW, label: 'Preview' }
+]
+const canvasMode = ref(CANVAS_MODE_DESIGN)
 let isSyncingRepeatedBandElements = false
+let dataBandRenderTemplatePages = null
+let designModePages = null
+let designModeActivePageId = activePageId.value
+let previewModePages = null
+let previewModeActivePageId = ''
+const previewModeVersion = ref(0)
+const isDesignMode = computed(() => canvasMode.value === CANVAS_MODE_DESIGN)
+const isPreviewMode = computed(() => canvasMode.value === CANVAS_MODE_PREVIEW)
+const hasPreviewPages = computed(() => {
+  previewModeVersion.value
+
+  return Array.isArray(previewModePages) && previewModePages.length > 0
+})
 const activePageIndex = computed(() => {
   const index = pages.value.findIndex(page => page.id === activePageId.value)
 
@@ -790,6 +830,8 @@ function getPageColumnUnitInches(value, maxInches) {
 }
 
 function setActivePageColumnSettings(attrs = {}) {
+  if (!canEditCanvas()) return
+
   const page = activePage.value
 
   if (!page) return
@@ -808,6 +850,8 @@ function setActivePageColumnSettings(attrs = {}) {
 }
 
 function applyPageColumnSettingsToPages(settings = activePageColumnSettings.value) {
+  if (!canEditCanvas()) return
+
   pages.value.forEach(page => {
     if (!page) return
 
@@ -820,6 +864,7 @@ function getCanvasPageColumnCount(page) {
 }
 
 function applyPageWatermarkSettingsToPages(settings = activePageWatermark.value) {
+  if (!canEditCanvas()) return
   if (isApplyingPageWatermarkSettings) return
 
   isApplyingPageWatermarkSettings = true
@@ -884,6 +929,8 @@ function loadActivePageWatermarkImage() {
 }
 
 function uploadPageWatermarkImage(event) {
+  if (!canEditCanvas()) return
+
   const input = event.target
   const file = input.files?.[0]
   const page = activePage.value
@@ -988,6 +1035,8 @@ function getPageWatermarkImageConfigs() {
 }
 
 function setPageColumnWidthInches(value) {
+  if (!canEditCanvas()) return
+
   const count = pageColumnCount.value
 
   if (count <= 1) return
@@ -1016,7 +1065,7 @@ function getPageContentBoundsPixels(config = pageConfig.value) {
 }
 
 function getPageColumnGuideConfigs() {
-  if (isPdfExporting.value) return []
+  if (isPdfExporting.value || isPreviewMode.value) return []
 
   const settings = activePageColumnSettings.value
 
@@ -1044,7 +1093,7 @@ function getPageColumnGuideConfigs() {
 function getPageGridLineConfigs() {
   const settings = getNormalizedPageGridSettings(pageGridSettings.value)
 
-  if (!settings.visible || isPdfExporting.value) return []
+  if (!settings.visible || isPdfExporting.value || isPreviewMode.value) return []
 
   const config = pageConfig.value
   const lines = []
@@ -1141,7 +1190,7 @@ const pageMarginGuideConfig = computed(() => {
     stroke: '#94a3b8',
     strokeWidth: 1,
     dash: [6, 4],
-    visible: !isPdfExporting.value,
+    visible: !isPdfExporting.value && isDesignMode.value,
     listening: false
   }
 })
@@ -1157,8 +1206,15 @@ const pageClipConfig = computed(() => ({
 }))
 const activeBand = computed(() => bands.value.find(band => band.id === activeBandId.value) || null)
 const hasBands = computed(() => bands.value.length > 0)
-const bandGuideConfigs = computed(() => getBandGuideConfigs())
-const bandResizeHandleConfigs = computed(() => getBandResizeHandleConfigs())
+const bandGuideConfigs = computed(() => (isPreviewMode.value ? [] : getBandGuideConfigs()))
+const bandResizeHandleConfigs = computed(() => (isPreviewMode.value ? [] : getBandResizeHandleConfigs()))
+watch(bands, () => {
+  dataBandRenderTemplatePages = null
+  designModePages = null
+  designModeActivePageId = ''
+  clearPreviewModeSnapshot()
+  canvasMode.value = CANVAS_MODE_DESIGN
+}, { deep: true })
 const stageConfig = computed(() => ({
   width: pagePixelSize.value.width + PAGE_STAGE_PADDING_X,
   height: pagePixelSize.value.height + PAGE_STAGE_PADDING_Y
@@ -1347,7 +1403,79 @@ function getAllPageElements() {
   ))
 }
 
+function canEditCanvas() {
+  return isDesignMode.value
+}
+
+function getCanvasItemDraggable(item) {
+  return canEditCanvas() && item?.draggable !== false
+}
+
+function isAggregateTableCell(item) {
+  return Boolean(
+    item &&
+    typeof item === 'object' &&
+    !item.type &&
+    Object.prototype.hasOwnProperty.call(item, 'row') &&
+    Object.prototype.hasOwnProperty.call(item, 'col') &&
+    Object.prototype.hasOwnProperty.call(item, 'text')
+  )
+}
+
+function canElementHaveAggregate(item) {
+  return ['text', 'label'].includes(item?.type) || isAggregateTableCell(item)
+}
+
+function getNormalizedAggregateFunction(value) {
+  const normalized = String(value || '').trim().toUpperCase()
+
+  return aggregateFunctionOptions.some(option => option.value === normalized)
+    ? normalized
+    : defaultAggregateSettings.function
+}
+
+function getNormalizedAggregateScope(value) {
+  const normalized = String(value || '').trim()
+
+  return aggregateScopeOptions.some(option => option.value === normalized)
+    ? normalized
+    : defaultAggregateSettings.scope
+}
+
+function getNormalizedAggregateSettings(settings = {}) {
+  return {
+    enabled: Boolean(settings?.enabled),
+    function: getNormalizedAggregateFunction(settings?.function || settings?.operation),
+    scope: getNormalizedAggregateScope(settings?.scope),
+    dataSource: String(settings?.dataSource || settings?.source || '').trim(),
+    field: String(settings?.field || settings?.valuePath || settings?.path || '').trim()
+  }
+}
+
+function ensureAggregateSettings(item) {
+  if (!canElementHaveAggregate(item)) return
+
+  item.aggregate = getNormalizedAggregateSettings(item.aggregate)
+}
+
+function setAggregateSetting(target, key, value) {
+  if (!canEditCanvas() || !canElementHaveAggregate(target)) return
+
+  ensureAggregateSettings(target)
+
+  if (key === 'enabled') target.aggregate.enabled = Boolean(value)
+  if (key === 'function') target.aggregate.function = getNormalizedAggregateFunction(value)
+  if (key === 'scope') target.aggregate.scope = getNormalizedAggregateScope(value)
+  if (key === 'dataSource') target.aggregate.dataSource = String(value || '').trim()
+  if (key === 'field') target.aggregate.field = String(value || '').trim()
+}
+
+function setElementAggregateSetting(target, key, value) {
+  setAggregateSetting(target, key, value)
+}
+
 function setPageOrientation(page, orientation) {
+  if (!canEditCanvas()) return
   if (!page) return
 
   const nextOrientation = getNormalizedPageOrientation(orientation)
@@ -1388,6 +1516,8 @@ function selectPage(pageId) {
 }
 
 function addPage() {
+  if (!canEditCanvas()) return
+
   const page = createCanvasPage(`Page ${pages.value.length + 1}`, {
     orientation: pageOrientation.value,
     columns: activePageColumnSettings.value,
@@ -1400,6 +1530,8 @@ function addPage() {
 }
 
 function duplicatePage(pageId = activePageId.value) {
+  if (!canEditCanvas()) return
+
   const sourceIndex = pages.value.findIndex(page => page.id === pageId)
   const sourcePage = pages.value[sourceIndex]
 
@@ -1426,6 +1558,8 @@ function duplicatePage(pageId = activePageId.value) {
 }
 
 function deletePage(pageId = activePageId.value) {
+  if (!canEditCanvas()) return
+
   if (pages.value.length <= 1) {
     clearCanvas()
     return
@@ -1452,6 +1586,8 @@ function deletePage(pageId = activePageId.value) {
 }
 
 function renamePage(pageId, name) {
+  if (!canEditCanvas()) return
+
   const page = pages.value.find(item => item.id === pageId)
 
   if (!page) return
@@ -1494,6 +1630,8 @@ function ensureNewBandTypeAvailable() {
 }
 
 function canAddBandType(type = newBandType.value) {
+  if (!canEditCanvas()) return false
+
   return Boolean(getFirstAvailableBandType()) && !isBandTypeUnavailable(type)
 }
 
@@ -1521,6 +1659,8 @@ function haveSameBandOrder(a = [], b = []) {
 }
 
 function canMoveBand(bandId, direction) {
+  if (!canEditCanvas()) return false
+
   const index = bands.value.findIndex(band => band.id === bandId)
   const nextIndex = index + direction
 
@@ -1556,6 +1696,54 @@ function getBandPlacement(band) {
   return getBandTypeOption(band?.type)?.placement || 'body'
 }
 
+function isDataBand(band) {
+  return getNormalizedBandType(band?.type) === 'data'
+}
+
+function getBandParentDataBandId(band) {
+  return String(band?.parentDataBandId ?? band?.parentBandId ?? '').trim()
+}
+
+function setBandParentDataBandId(band, value) {
+  if (!canEditCanvas()) return
+  if (!band) return
+
+  const parentId = String(value || '').trim()
+
+  band.parentDataBandId = parentId
+  band.parentBandId = parentId
+}
+
+function isBandDescendantOfDataBand(candidateBand, ancestorBandId) {
+  const ancestorId = String(ancestorBandId || '').trim()
+  let cursor = candidateBand
+  const seenIds = new Set()
+
+  while (cursor) {
+    const parentId = getBandParentDataBandId(cursor)
+
+    if (!parentId || seenIds.has(parentId)) return false
+    if (parentId === ancestorId) return true
+
+    seenIds.add(parentId)
+    cursor = bands.value.find(band => String(band.id) === parentId) || null
+  }
+
+  return false
+}
+
+function canUseBandAsParentDataBand(parentBand, childBand = null) {
+  if (!isDataBand(parentBand)) return false
+  if (!childBand) return true
+  if (String(parentBand.id) === String(childBand.id)) return false
+
+  return !isBandDescendantOfDataBand(parentBand, childBand.id)
+}
+
+function getParentDataBandOptions(band = activeBand.value) {
+  return bands.value.filter(candidate => canUseBandAsParentDataBand(candidate, band))
+}
+
 function getBandColor(band) {
   return band?.color || getBandTypeOption(band?.type)?.color || '#2563eb'
 }
@@ -1569,6 +1757,7 @@ function getBandInsideCanvasBorders(band) {
 }
 
 function setBandInsideCanvasBorders(band, value) {
+  if (!canEditCanvas()) return
   if (!band) return
 
   const snapshots = getBandElementOffsetSnapshots()
@@ -1738,6 +1927,7 @@ function assignBandElementColumnsFromPosition(bandId = '') {
 }
 
 function updateBandColumns(band, attrs = {}) {
+  if (!canEditCanvas()) return
   if (!band) return
 
   const currentColumns = getNormalizedBandColumnSettings(band.columns)
@@ -1822,6 +2012,7 @@ function restoreBandElementOffsetSnapshots(snapshots = []) {
 }
 
 function updateBandHeight(band, value, options = {}) {
+  if (!canEditCanvas()) return
   if (!band) return
 
   const snapshots = options.preserveElementOffsets === false
@@ -1858,8 +2049,13 @@ function getBandListMeta(band) {
   const columnCount = getBandColumnCount(band)
   const columnMeta = columnCount > 1 ? ` / ${columnCount} col` : ''
   const borderMeta = getBandInsideCanvasBorders(band) ? ' / inside' : ''
+  const sourceMeta = String(band?.dataSource || '').trim()
+    ? ` / ${String(band.dataSource).trim()}`
+    : ''
+  const parentBand = getBandById(getBandParentDataBandId(band))
+  const parentMeta = parentBand ? ` / parent ${getBandTitle(parentBand)}` : ''
 
-  return `${getBandTypeLabel(band?.type)} / ${height}${columnMeta}${borderMeta} / ${onPage}/${total} item${total === 1 ? '' : 's'}`
+  return `${getBandTypeLabel(band?.type)} / ${height}${columnMeta}${borderMeta}${sourceMeta}${parentMeta} / ${onPage}/${total} item${total === 1 ? '' : 's'}`
 }
 
 function isBandVisibleOnPage(band, pageIndex = activePageIndex.value, pageCount = pages.value.length) {
@@ -1881,11 +2077,14 @@ function normalizeBandForStorage(band, usedIds = new Set()) {
 
   usedIds.add(id)
   normalizedBand.id = id
+  setBandParentDataBandId(normalizedBand, getBandParentDataBandId(normalizedBand))
 
   return normalizedBand
 }
 
 function addBand(type = newBandType.value) {
+  if (!canEditCanvas()) return
+
   if (!canAddBandType(type)) {
     ensureNewBandTypeAvailable()
     return
@@ -1905,6 +2104,7 @@ function selectBand(bandId) {
 }
 
 function setBandType(band, type) {
+  if (!canEditCanvas()) return
   if (!band) return
 
   const nextType = getNormalizedBandType(type)
@@ -1936,6 +2136,8 @@ function setBandHeight(band, value) {
 }
 
 function moveBand(bandId, direction) {
+  if (!canEditCanvas()) return
+
   if (!canMoveBand(bandId, direction)) return
 
   const snapshots = getBandElementOffsetSnapshots()
@@ -1980,6 +2182,8 @@ function clearRepeatedBandMetadataForBand(bandId) {
 }
 
 function deleteBand(bandId = activeBandId.value) {
+  if (!canEditCanvas()) return
+
   const index = bands.value.findIndex(band => band.id === bandId)
 
   if (index < 0) return
@@ -1998,6 +2202,8 @@ function getElementBandId(item) {
 }
 
 function setSelectedElementsBand(bandId) {
+  if (!canEditCanvas()) return
+
   const nextBand = getBandById(bandId)
   const nextBandId = nextBand ? nextBand.id : ''
 
@@ -2026,6 +2232,8 @@ function setSelectedElementsBand(bandId) {
 }
 
 function setSelectedElementsBandColumn(value) {
+  if (!canEditCanvas()) return
+
   const snapshots = getBandElementOffsetSnapshots()
 
   selectedItems.value.forEach(item => {
@@ -2053,6 +2261,7 @@ function setSelectedElementsBandColumn(value) {
 }
 
 function assignSelectedElementsToActiveBand() {
+  if (!canEditCanvas()) return
   if (!activeBand.value || !selectedItems.value.length) return
 
   setSelectedElementsBand(activeBand.value.id)
@@ -2061,7 +2270,16 @@ function assignSelectedElementsToActiveBand() {
 function getSerializableBands() {
   const usedIds = new Set()
 
-  return bands.value.map(band => getSerializableLayoutValue(normalizeBandForStorage(band, usedIds)))
+  return bands.value.map(band => {
+    const serializedBand = getSerializableLayoutValue(normalizeBandForStorage(band, usedIds))
+
+    delete serializedBand.parentBandId
+    if (!String(serializedBand.parentDataBandId || '').trim()) {
+      delete serializedBand.parentDataBandId
+    }
+
+    return serializedBand
+  })
 }
 
 function applyImportedBands(importedBands = [], importedActiveBandId = '') {
@@ -2155,8 +2373,7 @@ function createBandGuideConfig(band, segment, index) {
   }
 }
 
-function getPageConfigForPageIndex(pageIndex = activePageIndex.value) {
-  const page = pages.value[pageIndex] || activePage.value || pages.value[0]
+function getPageConfigForCanvasPage(page) {
   const size = getPagePixelSizeForOrientation(page?.orientation)
 
   return {
@@ -2167,29 +2384,73 @@ function getPageConfigForPageIndex(pageIndex = activePageIndex.value) {
   }
 }
 
-function getBandBoundsForPageIndex(pageIndex = activePageIndex.value, band = null) {
-  const page = getPageConfigForPageIndex(pageIndex)
+function getPageConfigForPageIndex(pageIndex = activePageIndex.value) {
+  const page = pages.value[pageIndex] || activePage.value || pages.value[0]
 
+  return getPageConfigForCanvasPage(page)
+}
+
+function getBandBoundsForPageConfig(page, band = null) {
   return getBandInsideCanvasBorders(band)
     ? getPageContentBoundsPixels(page)
     : page
 }
 
-function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
-  if ((isPdfExporting.value && !options.includeDuringExport) || !bands.value.length) return []
+function getBandBoundsForPageIndex(pageIndex = activePageIndex.value, band = null) {
+  return getBandBoundsForPageConfig(getPageConfigForPageIndex(pageIndex), band)
+}
 
-  const page = getPageConfigForPageIndex(pageIndex)
-  const visibleBands = bands.value.filter(band => isBandVisibleOnPage(band, pageIndex, pages.value.length))
+function getTopBandStackRank(band) {
+  const type = getNormalizedBandType(band?.type)
+
+  if (type === 'document-header') return 0
+  if (type === 'page-header') return 1
+
+  return 2
+}
+
+function getSortedTopBandsForStack(bandList = []) {
+  return [...bandList].sort((a, b) => (
+    getTopBandStackRank(a) - getTopBandStackRank(b) ||
+    bands.value.findIndex(band => String(band.id) === String(a.id)) -
+      bands.value.findIndex(band => String(band.id) === String(b.id))
+  ))
+}
+
+function getBottomBandStackRank(band) {
+  const type = getNormalizedBandType(band?.type)
+
+  if (type === 'document-footer') return 0
+  if (type === 'page-footer') return 1
+
+  return 2
+}
+
+function getSortedBottomBandsForStack(bandList = []) {
+  return [...bandList].sort((a, b) => (
+    getBottomBandStackRank(a) - getBottomBandStackRank(b) ||
+    bands.value.findIndex(band => String(band.id) === String(a.id)) -
+      bands.value.findIndex(band => String(band.id) === String(b.id))
+  ))
+}
+
+function getBandLayoutSegments(page, pageIndex, pageCount, options = {}) {
+  const sourceBands = Array.isArray(options.bandList) ? options.bandList : bands.value
+  const visibleBands = sourceBands.filter(band => isBandVisibleOnPage(band, pageIndex, pageCount))
   const fullBands = visibleBands.filter(band => getBandPlacement(band) === 'full')
-  const topBands = visibleBands.filter(band => getBandPlacement(band) === 'top')
-  const bottomBands = visibleBands.filter(band => getBandPlacement(band) === 'bottom')
+  const topBands = getSortedTopBandsForStack(
+    visibleBands.filter(band => getBandPlacement(band) === 'top')
+  )
+  const bottomBands = getSortedBottomBandsForStack(
+    visibleBands.filter(band => getBandPlacement(band) === 'bottom')
+  )
   const bodyBands = visibleBands.filter(band => getBandPlacement(band) === 'body')
   const segments = []
   let topY = page.y
   let bottomY = page.y + page.height
 
   fullBands.forEach(band => {
-    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const bounds = getBandBoundsForPageConfig(page, band)
 
     segments.push({
       band,
@@ -2202,7 +2463,7 @@ function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
   })
 
   topBands.forEach(band => {
-    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const bounds = getBandBoundsForPageConfig(page, band)
     const y = Math.max(topY, bounds.y)
     const limit = Math.min(bottomY, bounds.y + bounds.height)
     const availableHeight = Math.max(0, limit - y)
@@ -2224,7 +2485,7 @@ function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
   })
 
   bottomBands.forEach(band => {
-    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const bounds = getBandBoundsForPageConfig(page, band)
     const limit = Math.max(topY, bounds.y)
     const bottom = Math.min(bottomY, bounds.y + bounds.height)
     const availableHeight = Math.max(0, bottom - limit)
@@ -2247,7 +2508,7 @@ function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
   })
 
   bodyBands.forEach(band => {
-    const bounds = getBandBoundsForPageIndex(pageIndex, band)
+    const bounds = getBandBoundsForPageConfig(page, band)
     const y = Math.max(topY, bounds.y)
     const limit = Math.min(bottomY, bounds.y + bounds.height)
     const availableHeight = Math.max(0, limit - y)
@@ -2269,6 +2530,17 @@ function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
   })
 
   return segments
+}
+
+function getBandGuideSegments(pageIndex = activePageIndex.value, options = {}) {
+  if ((isPdfExporting.value && !options.includeDuringExport) || !bands.value.length) return []
+
+  return getBandLayoutSegments(
+    getPageConfigForPageIndex(pageIndex),
+    pageIndex,
+    pages.value.length,
+    options
+  )
 }
 
 function getBandGuideConfigs() {
@@ -2301,6 +2573,7 @@ function isBandResizeHandleVisible(segment) {
   return Boolean(
     segment?.band &&
     !isPdfExporting.value &&
+    canEditCanvas() &&
     getBandPlacement(segment.band) !== 'full'
   )
 }
@@ -2319,7 +2592,7 @@ function getBandResizeHandleConfigs() {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: BAND_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     }))
@@ -2334,6 +2607,8 @@ function setStageCursor(event, cursor) {
 }
 
 function setBandResizeCursor(event) {
+  if (!canEditCanvas()) return
+
   setStageCursor(event, 'row-resize')
 }
 
@@ -2362,6 +2637,8 @@ function resetBandResizeHandleNodePosition(node, bandId) {
 }
 
 function handleBandResizePointerDown(event, handle) {
+  if (!canEditCanvas()) return
+
   const band = getBandById(handle?.bandId)
 
   if (!band) return
@@ -2377,6 +2654,8 @@ function handleBandResizePointerDown(event, handle) {
 }
 
 function startBandResizeDrag(event, handle) {
+  if (!canEditCanvas()) return
+
   const band = getBandById(handle?.bandId)
   const segment = band ? getBandSegmentForPageIndex(band, activePageIndex.value) : null
   const point = getStagePointerPosition(event)
@@ -2397,6 +2676,8 @@ function startBandResizeDrag(event, handle) {
 }
 
 function resizeBandFromHandleDrag(event, handle) {
+  if (!canEditCanvas()) return
+
   const dragState = bandResizeDrag.value
   const band = getBandById(dragState?.bandId)
   const point = getStagePointerPosition(event)
@@ -2419,6 +2700,8 @@ function resizeBandFromHandleDrag(event, handle) {
 }
 
 function finishBandResizeDrag(event, handle) {
+  if (!canEditCanvas()) return
+
   const bandId = bandResizeDrag.value?.bandId || handle?.bandId
 
   stopBandResizeEvent(event)
@@ -2711,6 +2994,7 @@ function clearRepeatedBandElementMetadata(item) {
   delete item.bandMasterId
   delete item.bandMasterPageId
   delete item.bandSyncedClone
+  delete item.bandGeneratedInstance
   delete item.bandOffsetX
   delete item.bandOffsetY
 }
@@ -2770,7 +3054,7 @@ function getRepeatedBandMasterEntries() {
     if (!Array.isArray(page?.elements)) return
 
     page.elements.forEach(item => {
-      if (!item || item.bandSyncedClone) return
+      if (!item || item.bandSyncedClone || item.bandGeneratedInstance) return
 
       const band = getBandById(item.bandId)
 
@@ -2916,8 +3200,8 @@ const selectedItems = computed(() => {
 
   return canvasItems.value.filter(item => selectedIdSet.has(item.id))
 })
-const canDeleteSelected = computed(() => selectedItems.value.length > 0)
-const canPasteCopiedItems = computed(() => copiedCanvasItems.value.length > 0 && !editingId.value)
+const canDeleteSelected = computed(() => canEditCanvas() && selectedItems.value.length > 0)
+const canPasteCopiedItems = computed(() => canEditCanvas() && copiedCanvasItems.value.length > 0 && !editingId.value)
 const contextMenuStyle = computed(() => {
   const style = {
     left: `${contextMenu.value.x}px`,
@@ -2937,8 +3221,9 @@ const canMoveSelectedForward = computed(() => (
   selectedLayerIndex.value >= 0 && selectedLayerIndex.value < canvasItems.value.length - 1
 ))
 const selectedElementDimensions = computed(() => getElementDimensionReadout(selectedItem.value))
-const canAlignSelected = computed(() => selectedItems.value.length > 1)
+const canAlignSelected = computed(() => canEditCanvas() && selectedItems.value.length > 1)
 const canGroupSelected = computed(() => (
+  canEditCanvas() &&
   selectedItems.value.length > 1 &&
   selectedItems.value.every(item => item.type !== 'group')
 ))
@@ -3003,7 +3288,7 @@ const transformerConfig = computed(() => {
   const canResizeFreely = !isMoveOnlySelection && ['text', 'image', 'chart', 'pieChart', 'checkbox'].includes(selectedItem.value?.type)
 
   return {
-    visible: !isPdfExporting.value,
+    visible: !isPdfExporting.value && isDesignMode.value,
     rotateEnabled: !isMoveOnlySelection,
     keepRatio: !canResizeFreely,
     flipEnabled: false,
@@ -3031,6 +3316,8 @@ const richEditorStyle = computed(() => {
 --------------------------*/
 
 function addQR(dropPoint = null) {
+  if (!canEditCanvas()) return
+
   const link = getNormalizedQRLink(qrLink.value)
   const targetCanvasVersion = canvasVersion
 
@@ -3074,6 +3361,8 @@ function addQR(dropPoint = null) {
 }
 
 function addBarcode(dropPoint = null) {
+  if (!canEditCanvas()) return
+
   const value = barcodeValue.value.trim()
   const validationError = getBarcodeValidationError(value)
   const targetCanvasVersion = canvasVersion
@@ -3125,6 +3414,8 @@ function addBarcode(dropPoint = null) {
 }
 
 function addText() {
+  if (!canEditCanvas()) return
+
   const item = new TextElement()
 
   snapElementPositionToGrid(item)
@@ -3132,6 +3423,8 @@ function addText() {
 }
 
 function addClipboardText(text, pastePoint = null) {
+  if (!canEditCanvas()) return false
+
   const value = String(text || '')
 
   if (!value.trim()) return false
@@ -3194,6 +3487,8 @@ function getSidebarElementDragType(event) {
 }
 
 function handleSidebarElementDragStart(event, type) {
+  if (!canEditCanvas()) return
+
   if (!sidebarElementDragTypes.has(type) || !event.dataTransfer) return
 
   draggedSidebarElementType.value = type
@@ -3217,6 +3512,8 @@ function getCanvasDropPoint(event) {
 }
 
 function addUploadedImage(file, dropPoint = null) {
+  if (!canEditCanvas()) return
+
   if (!isImageFile(file)) return
 
   const objectUrl = URL.createObjectURL(file)
@@ -3263,6 +3560,12 @@ function addUploadedImage(file, dropPoint = null) {
 
 function uploadImage(event) {
   const input = event.target
+
+  if (!canEditCanvas()) {
+    input.value = ''
+    return
+  }
+
   const file = getFirstImageFile(input.files)
 
   if (file) addUploadedImage(file)
@@ -3270,6 +3573,8 @@ function uploadImage(event) {
 }
 
 function handleImageDragEnter(event) {
+  if (!canEditCanvas()) return
+
   if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
@@ -3277,6 +3582,8 @@ function handleImageDragEnter(event) {
 }
 
 function handleImageDragOver(event) {
+  if (!canEditCanvas()) return
+
   if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
@@ -3291,6 +3598,8 @@ function handleImageDragLeave(event) {
 }
 
 function handleImageDrop(event) {
+  if (!canEditCanvas()) return
+
   if (!hasFileDrag(event) && !hasSidebarElementDrag(event)) return
 
   event.preventDefault()
@@ -3311,6 +3620,8 @@ function handleImageDrop(event) {
 }
 
 function addRect() {
+  if (!canEditCanvas()) return
+
   const item = new RectElement()
 
   snapElementPositionToGrid(item)
@@ -3318,6 +3629,8 @@ function addRect() {
 }
 
 function addCircle() {
+  if (!canEditCanvas()) return
+
   const item = new CircleElement()
 
   snapElementPositionToGrid(item)
@@ -3325,6 +3638,8 @@ function addCircle() {
 }
 
 function addTriangle() {
+  if (!canEditCanvas()) return
+
   const item = new RegularPolygonElement({
     type: 'triangle',
     sides: 3,
@@ -3338,6 +3653,8 @@ function addTriangle() {
 }
 
 function addRightTriangle() {
+  if (!canEditCanvas()) return
+
   const item = new RightTriangleElement()
 
   snapElementPositionToGrid(item)
@@ -3345,6 +3662,8 @@ function addRightTriangle() {
 }
 
 function addLine() {
+  if (!canEditCanvas()) return
+
   const item = new LineElement()
 
   snapElementPositionToGrid(item)
@@ -3352,6 +3671,8 @@ function addLine() {
 }
 
 function addArrow() {
+  if (!canEditCanvas()) return
+
   const item = new ArrowElement()
 
   snapElementPositionToGrid(item)
@@ -3359,6 +3680,8 @@ function addArrow() {
 }
 
 function addLabel() {
+  if (!canEditCanvas()) return
+
   const item = new LabelElement()
 
   snapElementPositionToGrid(item)
@@ -3366,6 +3689,8 @@ function addLabel() {
 }
 
 function addCheckbox() {
+  if (!canEditCanvas()) return
+
   const item = new CheckboxElement()
 
   snapElementPositionToGrid(item)
@@ -3373,6 +3698,8 @@ function addCheckbox() {
 }
 
 function addPolygon() {
+  if (!canEditCanvas()) return
+
   const item = new RegularPolygonElement()
 
   snapElementPositionToGrid(item)
@@ -3380,6 +3707,8 @@ function addPolygon() {
 }
 
 function addChart() {
+  if (!canEditCanvas()) return
+
   const id = Date.now()
   const item = new ChartElement({
     id,
@@ -3393,6 +3722,8 @@ function addChart() {
 }
 
 function addPieChart() {
+  if (!canEditCanvas()) return
+
   const id = Date.now()
   const item = new PieChartElement({
     id,
@@ -3469,6 +3800,8 @@ function createSidebarCanvasElement(type) {
 }
 
 function addSidebarElementToCanvas(type, dropPoint) {
+  if (!canEditCanvas()) return false
+
   if (type === 'qr') {
     addQR(dropPoint)
     return true
@@ -3532,6 +3865,7 @@ function createTableCell(tableId, row, col, overrides = {}) {
     text: '',
     templateVariable: '',
     repeatVariable: '',
+    aggregate: { ...defaultAggregateSettings },
     ...defaultTableCellSettings,
     ...overrides
   }
@@ -3565,6 +3899,7 @@ function ensureTableCellSettings(cell, tableId) {
     text: cell.text ?? '',
     templateVariable: String(cell.templateVariable || '').trim(),
     repeatVariable: String(cell.repeatVariable || '').trim(),
+    aggregate: getNormalizedAggregateSettings(cell.aggregate),
     repeatGeneratedFrom: String(cell.repeatGeneratedFrom || '').trim(),
     repeatSourceCellId: cell.repeatSourceCellId,
     repeatSourceRow: cell.repeatSourceRow,
@@ -3717,7 +4052,7 @@ function getTableConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -3899,7 +4234,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     })
@@ -3918,7 +4253,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     })
@@ -3935,7 +4270,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     },
@@ -3949,7 +4284,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     },
@@ -3963,7 +4298,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     },
@@ -3977,7 +4312,7 @@ function getTableResizeHandleConfigs(table) {
       stroke: 'rgba(37,99,235,0.001)',
       strokeWidth: 1,
       hitStrokeWidth: TABLE_RESIZE_HANDLE_HIT_SIZE,
-      draggable: true,
+      draggable: canEditCanvas(),
       listening: true,
       perfectDrawEnabled: false
     }
@@ -4179,6 +4514,8 @@ function resizeTableOuterBounds(table, dragState, point) {
 }
 
 function handleTableResizeHandlePointerDown(event, tableId) {
+  if (!canEditCanvas()) return
+
   const table = getCanvasItemById(tableId)
 
   if (!table) return
@@ -4196,6 +4533,8 @@ function handleTableResizeHandlePointerDown(event, tableId) {
 }
 
 function startTableResizeDrag(event, tableId, handle) {
+  if (!canEditCanvas()) return
+
   const table = getCanvasItemById(tableId)
 
   if (!table || !handle) return
@@ -4227,6 +4566,8 @@ function startTableResizeDrag(event, tableId, handle) {
 }
 
 function resizeTableFromHandleDrag(event, tableId, handle) {
+  if (!canEditCanvas()) return
+
   const table = getCanvasItemById(tableId)
   const dragState = tableResizeDrag.value
 
@@ -4268,6 +4609,11 @@ function resizeTableFromHandleDrag(event, tableId, handle) {
 }
 
 function finishTableResizeDrag(event, tableId, handle) {
+  if (!canEditCanvas()) {
+    tableResizeDrag.value = null
+    return
+  }
+
   const table = getCanvasItemById(tableId)
   const dragState = tableResizeDrag.value
 
@@ -4319,6 +4665,8 @@ function isTableCellSelected(cellId) {
 }
 
 function selectTableCell(tableId, cellId, options = {}) {
+  if (!canEditCanvas()) return
+
   const table = getCanvasItemById(tableId)
   const cell = getTableCellById(table, cellId)
 
@@ -4352,6 +4700,24 @@ function getSelectedTableCellStyleValue(property, fallback) {
   return source?.[property] ?? fallback
 }
 
+function getSelectedTableCellAggregateValue(property, fallback) {
+  const source = selectedTableCells.value[0]
+
+  if (!source) return fallback
+
+  ensureAggregateSettings(source)
+
+  return source.aggregate?.[property] ?? fallback
+}
+
+function setSelectedTableCellsAggregateSetting(property, value) {
+  if (!canEditCanvas()) return
+
+  selectedTableCells.value.forEach(cell => {
+    setAggregateSetting(cell, property, value)
+  })
+}
+
 function getSelectedTableCellRows() {
   return Array.from(new Set(
     selectedTableCells.value
@@ -4374,6 +4740,8 @@ function getSelectedTableRowRepeatVariable() {
 }
 
 function setSelectedTableRowRepeatVariable(value) {
+  if (!canEditCanvas()) return
+
   const table = selectedTable.value
   const rows = getSelectedTableCellRows()
 
@@ -4389,6 +4757,8 @@ function setSelectedTableRowRepeatVariable(value) {
 }
 
 function setSelectedTableCellsStyle(attrs) {
+  if (!canEditCanvas()) return
+
   const cells = selectedTableCells.value
 
   cells.forEach(cell => {
@@ -4429,7 +4799,8 @@ function cloneTableCellStyle(cell) {
     borderColor: cell.borderColor,
     borderWidth: cell.borderWidth,
     borderStyle: cell.borderStyle,
-    repeatVariable: cell.repeatVariable
+    repeatVariable: cell.repeatVariable,
+    aggregate: getNormalizedAggregateSettings(cell.aggregate)
   }
 }
 
@@ -4438,6 +4809,8 @@ function fillMissingTableCells(table) {
 }
 
 function insertTableRow(table, rowIndex) {
+  if (!canEditCanvas()) return
+
   if (!table) return
 
   ensureTableTrackSettings(table)
@@ -4461,6 +4834,8 @@ function insertTableRow(table, rowIndex) {
 }
 
 function insertTableColumn(table, colIndex) {
+  if (!canEditCanvas()) return
+
   if (!table) return
 
   ensureTableTrackSettings(table)
@@ -4484,6 +4859,8 @@ function insertTableColumn(table, colIndex) {
 }
 
 function deleteTableRow(table, rowIndex) {
+  if (!canEditCanvas()) return
+
   if (!table || table.rows <= 1) return
 
   ensureTableTrackSettings(table)
@@ -4514,6 +4891,8 @@ function deleteTableRow(table, rowIndex) {
 }
 
 function deleteTableColumn(table, colIndex) {
+  if (!canEditCanvas()) return
+
   if (!table || table.cols <= 1) return
 
   ensureTableTrackSettings(table)
@@ -4580,6 +4959,8 @@ function deleteTableColumnFromContext() {
 }
 
 function splitTableCellVertically(table, cell) {
+  if (!canEditCanvas()) return
+
   if (!table || !cell) return
 
   ensureTableTrackSettings(table)
@@ -4636,6 +5017,8 @@ function splitTableCellVertically(table, cell) {
 }
 
 function splitTableCellHorizontally(table, cell) {
+  if (!canEditCanvas()) return
+
   if (!table || !cell) return
 
   ensureTableTrackSettings(table)
@@ -4706,6 +5089,8 @@ function splitTableCellHorizontallyFromContext() {
 }
 
 function mergeSelectedTableCells() {
+  if (!canEditCanvas()) return false
+
   const table = selectedTable.value
   const cells = selectedTableCells.value
 
@@ -4752,6 +5137,8 @@ function mergeSelectedTableCells() {
 }
 
 function addTable() {
+  if (!canEditCanvas()) return
+
   const rows = getTableDimensionValue(tableRowsInput.value, MIN_TABLE_ROWS, MAX_TABLE_ROWS, 3)
   const cols = getTableDimensionValue(tableColsInput.value, MIN_TABLE_COLS, MAX_TABLE_COLS, 3)
   const id = Date.now()
@@ -5188,7 +5575,7 @@ function getGroupConfig(item) {
     x: item.x,
     y: item.y,
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -5295,7 +5682,7 @@ function getCheckboxBoxConfig(item) {
     height: getCheckboxHeight(item),
     rotation: item.rotation || 0,
     opacity: clampNumber(item.opacity ?? defaultCheckboxSettings.opacity, 0, 1),
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -5923,6 +6310,7 @@ function getTextConfig(item) {
     fontSize: item.fontSize ?? defaultTextSettings.fontSize,
     lineHeight: item.lineHeight ?? defaultTextSettings.lineHeight,
     letterSpacing: item.letterSpacing ?? defaultTextSettings.letterSpacing,
+    draggable: getCanvasItemDraggable(item),
     visible: item.id !== editingId.value,
     ...getElementDragConstraintConfig(item)
   }
@@ -5947,6 +6335,7 @@ function getRectConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.rect,
     cornerRadius: getCornerRadiusConfig(item),
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -5959,6 +6348,7 @@ function getCircleConfig(item) {
     strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills.circle,
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -5971,6 +6361,7 @@ function getRegularPolygonConfig(item) {
     strokeWidth: item.strokeWidth ?? defaultShapeSettings.strokeWidth,
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     fill: item.fill ?? defaultShapeFills[item.type],
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -5993,7 +6384,7 @@ function getRightTriangleConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     lineJoin: 'round',
     rotation: item.rotation || 0,
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -6008,7 +6399,7 @@ function getLineConfig(item) {
     lineCap: item.lineCap ?? 'round',
     lineJoin: item.lineJoin ?? 'round',
     hitStrokeWidth: item.hitStrokeWidth ?? Math.max(defaultLineHitStrokeWidth, item.strokeWidth || 0),
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -6022,7 +6413,7 @@ function getArrowConfig(item) {
     opacity: item.opacity ?? defaultShapeSettings.opacity,
     lineCap: item.lineCap ?? 'round',
     lineJoin: item.lineJoin ?? 'round',
-    draggable: item.draggable !== false,
+    draggable: getCanvasItemDraggable(item),
     ...getShapeBorderConfig(item),
     ...getElementDragConstraintConfig(item)
   }
@@ -6035,7 +6426,7 @@ function getRichTextImageConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable,
+    draggable: getCanvasItemDraggable(item),
     image: item.richImage,
     visible: item.id !== editingId.value,
     ...getElementDragConstraintConfig(item)
@@ -6049,7 +6440,7 @@ function getImageBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -6076,7 +6467,7 @@ function getLabelConfig(item) {
   return {
     x: item.x,
     y: item.y,
-    draggable: item.draggable,
+    draggable: getCanvasItemDraggable(item),
     rotation: item.rotation || 0,
     opacity: item.opacity ?? 1,
     ...getElementDragConstraintConfig(item)
@@ -6203,7 +6594,7 @@ function getChartBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -6544,7 +6935,7 @@ function getPieChartBoxConfig(item) {
     width: item.width,
     height: item.height,
     rotation: item.rotation || 0,
-    draggable: item.draggable,
+    draggable: getCanvasItemDraggable(item),
     ...getElementDragConstraintConfig(item)
   }
 }
@@ -6921,6 +7312,8 @@ function syncCanvasLayerOrder() {
 }
 
 function reorderCanvasItemLayer(itemId, targetLayerIndex) {
+  if (!canEditCanvas()) return
+
   const layerItems = canvasItems.value
   const currentLayerIndex = layerItems.findIndex(item => String(item.id) === String(itemId))
 
@@ -6957,6 +7350,8 @@ function reorderCanvasItemLayer(itemId, targetLayerIndex) {
 }
 
 function reorderSelectedLayer(targetLayerIndex) {
+  if (!canEditCanvas()) return
+
   if (selectedId.value === null) return
 
   reorderCanvasItemLayer(selectedId.value, targetLayerIndex)
@@ -6979,6 +7374,8 @@ function moveSelectedLayerToFront() {
 }
 
 function alignSelectedElements(axis, alignment) {
+  if (!canEditCanvas()) return
+
   if (!canAlignSelected.value) return
 
   if (editingId.value) finishTextEditing()
@@ -7060,6 +7457,8 @@ function getSelectedCanvasItemsForClipboard() {
 }
 
 function copySelectedCanvasItems() {
+  if (!canEditCanvas()) return false
+
   if (editingId.value) return false
 
   const itemsToCopy = getSelectedCanvasItemsForClipboard()
@@ -7159,6 +7558,7 @@ function preparePastedCanvasItem(item, delta, usedIds) {
 }
 
 function pasteCopiedCanvasItems(options = {}) {
+  if (!canEditCanvas()) return false
   if (editingId.value || !copiedCanvasItems.value.length) return false
 
   const usedIds = collectCanvasItemIds(elements.value)
@@ -7306,6 +7706,8 @@ function getCanvasItemIdFromKonvaTarget(target) {
 }
 
 function showElementContextMenu(itemId, event) {
+  if (!canEditCanvas()) return
+
   if (editingId.value && editingId.value !== itemId) {
     finishTextEditing()
   }
@@ -7327,6 +7729,8 @@ function showElementContextMenu(itemId, event) {
 }
 
 function showCanvasContextMenu(event) {
+  if (!canEditCanvas()) return
+
   const point = getStagePointerPosition(event)
   const position = getContextMenuPosition(point.x + 8, point.y + 8, 'canvas')
 
@@ -7349,6 +7753,8 @@ function handleStageContextMenu(event) {
   nativeEvent?.preventDefault?.()
   nativeEvent?.stopPropagation?.()
 
+  if (!canEditCanvas()) return
+
   const itemId = getCanvasItemIdFromKonvaTarget(event?.target)
 
   if (itemId !== null && itemId !== undefined) {
@@ -7364,6 +7770,8 @@ function handleSelectableContextMenu(event, itemId) {
 
   nativeEvent?.preventDefault?.()
   nativeEvent?.stopPropagation?.()
+
+  if (!canEditCanvas()) return
 
   event.cancelBubble = true
   showElementContextMenu(itemId, event)
@@ -7383,6 +7791,8 @@ function copyContextMenuElement() {
 }
 
 function deleteContextMenuElement() {
+  if (!canEditCanvas()) return false
+
   const itemId = contextMenu.value.targetId
 
   if (itemId === null || itemId === undefined) return false
@@ -7396,6 +7806,8 @@ function deleteContextMenuElement() {
 }
 
 function pasteContextMenuItems() {
+  if (!canEditCanvas()) return false
+
   const pasted = pasteCopiedCanvasItems({
     pastePoint: contextMenu.value.pastePoint
   })
@@ -7444,6 +7856,8 @@ function pasteExternalClipboardText(text) {
 }
 
 function handleGlobalPaste(event) {
+  if (!canEditCanvas()) return
+
   if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
 
   const clipboardData = event.clipboardData
@@ -7492,6 +7906,8 @@ function handleGlobalClipboardKeyDown(event) {
     return
   }
 
+  if (!canEditCanvas()) return
+
   if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
 
   const key = String(event.key || '').toLowerCase()
@@ -7536,6 +7952,7 @@ function ensureElementBandSettings(item) {
 function ensureSelectableItemSettings(item) {
   ensureElementBandSettings(item)
   ensureTemplateVariableSettings(item)
+  ensureAggregateSettings(item)
   ensureImageSettings(item)
   ensureTextSettings(item)
   ensureChartSettings(item)
@@ -7560,6 +7977,11 @@ function updateTransformerSelection(ids = selectedIds.value) {
 }
 
 function selectElements(ids) {
+  if (!canEditCanvas()) {
+    clearSelection()
+    return
+  }
+
   const availableIds = new Set(canvasItems.value.map(item => item.id))
   const nextIds = ids.filter((id, index) => (
     availableIds.has(id) &&
@@ -7592,6 +8014,7 @@ function selectElement(id) {
 }
 
 function selectLayerSidebarItem(item) {
+  if (!canEditCanvas()) return
   if (!item) return
 
   if (editingId.value && editingId.value !== item.id) {
@@ -7602,6 +8025,7 @@ function selectLayerSidebarItem(item) {
 }
 
 function handleLayerContextMenu(event, item) {
+  if (!canEditCanvas()) return
   if (!item) return
 
   event.preventDefault()
@@ -7627,6 +8051,7 @@ function handleLayerContextMenu(event, item) {
 }
 
 function handleLayerDragStart(event, item) {
+  if (!canEditCanvas()) return
   if (!item) return
 
   draggedLayerId.value = item.id
@@ -7640,6 +8065,7 @@ function handleLayerDragStart(event, item) {
 }
 
 function handleLayerDragOver(event, item) {
+  if (!canEditCanvas()) return
   if (!item || draggedLayerId.value === null || String(draggedLayerId.value) === String(item.id)) return
 
   event.preventDefault()
@@ -7655,6 +8081,8 @@ function handleLayerDragLeave(item) {
 }
 
 function handleLayerDrop(event, targetEntry) {
+  if (!canEditCanvas()) return
+
   event.preventDefault()
 
   const targetItem = targetEntry?.item || targetEntry
@@ -7678,6 +8106,8 @@ function handleLayerDragEnd() {
 }
 
 function toggleElementSelection(id) {
+  if (!canEditCanvas()) return
+
   const isSelected = selectedIds.value.includes(id)
   const nextIds = isSelected
     ? selectedIds.value.filter(selectedItemId => selectedItemId !== id)
@@ -7691,6 +8121,8 @@ function isMultiSelectEvent(event) {
 }
 
 function handleSelectablePointerDown(event, id) {
+  if (!canEditCanvas()) return
+
   event.cancelBubble = true
 
   if (editingId.value && editingId.value !== id) {
@@ -7714,6 +8146,8 @@ function stopSelectableClick(event) {
 }
 
 function handleTableCellPointerDown(event, tableId, cellId) {
+  if (!canEditCanvas()) return
+
   const isToggleSelection = isMultiSelectEvent(event)
   const isRepeatedClick = (Number(event?.evt?.detail) || 0) > 1
 
@@ -7738,6 +8172,8 @@ function handleTableCellPointerDown(event, tableId, cellId) {
 }
 
 function startTableCellEditing(event, tableId, cellId) {
+  if (!canEditCanvas()) return
+
   event.cancelBubble = true
   event.evt?.preventDefault?.()
   event.evt?.stopPropagation?.()
@@ -7793,6 +8229,8 @@ function handleTableCellContextMenu(event, tableId, cellId) {
   nativeEvent?.preventDefault?.()
   nativeEvent?.stopPropagation?.()
 
+  if (!canEditCanvas()) return
+
   event.cancelBubble = true
   selectTableCell(tableId, cellId)
 
@@ -7824,6 +8262,8 @@ function clearSelection() {
 }
 
 function groupSelectedElements() {
+  if (!canEditCanvas()) return
+
   if (!canGroupSelected.value) return
 
   if (editingId.value) finishTextEditing()
@@ -7866,6 +8306,8 @@ function groupSelectedElements() {
 }
 
 function ungroupSelectedGroup() {
+  if (!canEditCanvas()) return
+
   const group = selectedGroup.value
   if (!group) return
 
@@ -7884,6 +8326,8 @@ function ungroupSelectedGroup() {
 }
 
 function clearCanvas() {
+  if (!canEditCanvas()) return
+
   canvasVersion += 1
   elements.value = []
   nodeRefs.value = {}
@@ -7894,6 +8338,8 @@ function clearCanvas() {
 }
 
 function deleteSelectedElements() {
+  if (!canEditCanvas()) return false
+
   if (!selectedIds.value.length) return false
 
   const selectedIdSet = new Set(selectedIds.value)
@@ -7929,6 +8375,8 @@ function isNodeOutsideCanvas(node) {
 }
 
 function removeElement(id) {
+  if (!canEditCanvas()) return
+
   const wasSelected = selectedIds.value.includes(id)
 
   elements.value = elements.value.filter(item => item.id !== id)
@@ -7958,6 +8406,8 @@ function removeElementIfOutsideCanvas(node, id) {
 }
 
 function removeOutsideCanvasElements() {
+  if (!canEditCanvas()) return
+
   Object.entries(nodeRefs.value).forEach(([nodeId, node]) => {
     const item = elements.value.find(element => String(element.id) === nodeId)
     if (!item) return
@@ -8179,6 +8629,8 @@ function syncActiveTableCellEditForLayoutExport() {
 }
 
 function startTextEditing(item) {
+  if (!canEditCanvas()) return
+
   const node = nodeRefs.value[item.id]
   if (!node || !editor.value) return
 
@@ -8213,6 +8665,8 @@ function startTextEditing(item) {
 }
 
 function startShapeTextEditing(item) {
+  if (!canEditCanvas()) return
+
   if (!canShapeHaveRichText(item) || !editor.value) return
 
   ensureShapeTextSettings(item)
@@ -8249,6 +8703,8 @@ function handleStagePointerDown(event) {
   setLastCanvasPastePoint(getStagePointerPosition(event))
 
   if (contextMenu.value.visible) hideContextMenu()
+
+  if (!canEditCanvas()) return
 
   const target = event.target
   const isEditingTarget = isTargetInsideNode(target, nodeRefs.value[editingId.value])
@@ -8471,6 +8927,8 @@ function renderRichText(item, html, width, height, options = {}) {
 --------------------------*/
 
 function updatePosition(e, id) {
+  if (!canEditCanvas()) return
+
   const el = elements.value.find(i => i.id === id)
   if (!el) return
   if (el.tableGroup) return
@@ -8485,6 +8943,8 @@ function updatePosition(e, id) {
 }
 
 function updatePositionDuringDrag(e, id) {
+  if (!canEditCanvas()) return
+
   const el = elements.value.find(i => i.id === id)
   if (!el || el.tableGroup) return
 
@@ -8498,6 +8958,8 @@ function updatePositionDuringDrag(e, id) {
 --------------------------*/
 
 function updateTransform(e, id) {
+  if (!canEditCanvas()) return
+
   const node = e.target
   const el = elements.value.find(i => i.id === id)
   if (!el) return
@@ -8576,7 +9038,9 @@ const runtimeLayoutKeys = new Set([
   'richImage',
   'shapeRichImage',
   'imageDataUrl',
-  'imageSource'
+  'imageSource',
+  'bandGeneratedInstance',
+  'generatedFromDataBands'
 ])
 const DEFAULT_EXPORTED_IMAGE_URL = ''
 const PDF_POINTS_PER_INCH = 72
@@ -9010,7 +9474,7 @@ function downloadBlobFile(blob, fileName) {
 }
 
 async function getCurrentLayoutPdfBlob() {
-  syncRepeatedBandElements()
+  if (canEditCanvas()) syncRepeatedBandElements()
 
   const stage = getStageNode()
 
@@ -9204,14 +9668,26 @@ async function serializeCanvasPage(page, index, options = {}) {
 }
 
 async function createLayoutExportData(options = {}) {
-  syncActiveTextEditForLayoutExport()
-  syncActiveTableCellEditForLayoutExport()
-  syncRepeatedBandElements()
+  const sourcePages = Array.isArray(options.sourcePages) && options.sourcePages.length
+    ? options.sourcePages
+    : pages.value
+  const sourceActivePageId = getActivePageIdFromPageList(sourcePages, options.activePageId || activePageId.value)
+  const sourceActivePageIndex = Math.max(0, sourcePages.findIndex(page => String(page.id) === String(sourceActivePageId)))
+  const sourceActivePage = sourcePages[sourceActivePageIndex] || sourcePages[0] || activePage.value
+  const sourceActiveOrientation = getNormalizedPageOrientation(sourceActivePage?.orientation)
+  const sourcePageSizeInches = getPageSizeInchesForOrientation(sourceActiveOrientation)
+  const sourcePagePixelSize = getPagePixelSizeForOrientation(sourceActiveOrientation)
+
+  if (sourcePages === pages.value) {
+    syncActiveTextEditForLayoutExport()
+    syncActiveTableCellEditForLayoutExport()
+    syncRepeatedBandElements()
+  }
 
   const serializedPages = await Promise.all(
-    pages.value.map((page, index) => serializeCanvasPage(page, index, options))
+    sourcePages.map((page, index) => serializeCanvasPage(page, index, options))
   )
-  const currentSerializedPage = serializedPages[activePageIndex.value] || serializedPages[0] || {
+  const currentSerializedPage = serializedPages[sourceActivePageIndex] || serializedPages[0] || {
     elements: []
   }
   const allSerializedElements = serializedPages.flatMap(page => page.elements)
@@ -9221,7 +9697,7 @@ async function createLayoutExportData(options = {}) {
     documentType: options.documentType || 'layout',
     imageMode: options.imageMode || 'url',
     exportedAt: new Date().toISOString(),
-    activePageId: activePageId.value,
+    activePageId: sourceActivePageId,
     activeBandId: activeBandId.value,
     pageCount: serializedPages.length,
     pageNumbering: getSerializablePageNumberSettings(),
@@ -9229,17 +9705,17 @@ async function createLayoutExportData(options = {}) {
     page: {
       preset: selectedPagePreset.value,
       unit: pageUnit.value,
-      orientation: pageOrientation.value,
+      orientation: sourceActiveOrientation,
       canvasColor: canvasColor.value,
       grid: getSerializablePageGridSettings(),
-      sizeInches: { ...pageSizeInches.value },
-      sizePixels: { ...pagePixelSize.value },
+      sizeInches: { ...sourcePageSizeInches },
+      sizePixels: { ...sourcePagePixelSize },
       customSizeInches: { ...customPageSizeInches.value },
       marginPreset: selectedPageMarginPreset.value,
       marginsInches: { ...pageMarginsInches.value },
       customMarginsInches: { ...customPageMarginsInches.value },
-      columns: getClampedPageColumnSettings(activePage.value?.columns, activePage.value?.orientation),
-      watermark: getSerializableLayoutValue(clonePageWatermarkSettings(activePage.value?.watermark))
+      columns: getClampedPageColumnSettings(sourceActivePage?.columns, sourceActiveOrientation),
+      watermark: getSerializableLayoutValue(clonePageWatermarkSettings(sourceActivePage?.watermark))
     },
     variables: getTemplateVariablesFromElements(allSerializedElements),
     pages: serializedPages,
@@ -9290,9 +9766,14 @@ async function exportLayoutWithImageUrlsAsJson() {
 }
 
 async function exportTemplateAsJson() {
+  const sourcePages = isPreviewMode.value && designModePages?.length
+    ? designModePages
+    : pages.value
   const data = await createLayoutExportData({
     documentType: 'template',
-    imageMode: 'url'
+    imageMode: 'url',
+    sourcePages,
+    activePageId: sourcePages === designModePages ? designModeActivePageId : activePageId.value
   })
 
   downloadJsonFile(data, getLayoutExportFileName('template'))
@@ -9315,6 +9796,1358 @@ async function loadTemplateValueImages(imageElements, stats) {
   }))
 }
 
+function isPlainObjectValue(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function getDataValueByPath(source, path) {
+  if (!source || typeof source !== 'object') return undefined
+  if (Object.prototype.hasOwnProperty.call(source, path)) return source[path]
+
+  return String(path || '')
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, segment) => {
+      if (!value || typeof value !== 'object') return undefined
+
+      return value[segment]
+    }, source)
+}
+
+function getDataEntriesFromValue(value) {
+  if (Array.isArray(value)) return value
+  if (value === null || value === undefined) return []
+
+  return []
+}
+
+function resolveAggregatePathValue(path, ...sources) {
+  const sourcePath = String(path || '').trim()
+
+  if (!sourcePath) return undefined
+
+  for (const source of sources) {
+    const value = getDataValueByPath(source, sourcePath)
+
+    if (value !== undefined) return value
+  }
+
+  return undefined
+}
+
+function getDocumentAggregateRecords(state, settings) {
+  const source = String(settings?.dataSource || '').trim()
+
+  if (source) {
+    return getDataEntriesFromValue(resolveAggregatePathValue(source, state.rootContext.valueContext, state.rootContext.rootValues))
+  }
+
+  const rootValue = state.rootContext.rootValues
+
+  if (Array.isArray(rootValue)) return rootValue
+
+  const rootDataBands = getRootDataBands()
+
+  if (rootDataBands.length === 1) {
+    return getDataBandEntries(rootDataBands[0], state.rootContext)
+  }
+
+  return []
+}
+
+function resolveAggregateSourceRecords(state, settings, aggregateContext = {}) {
+  const scope = getNormalizedAggregateScope(settings?.scope)
+  const source = String(settings?.dataSource || '').trim()
+  const dataContext = aggregateContext.context || state.rootContext
+  const parentContext = aggregateContext.parentContext || null
+
+  if (scope === 'group' && !source && Array.isArray(aggregateContext.groupRecords)) {
+    return aggregateContext.groupRecords
+  }
+
+  if (scope === 'band' && !source && Array.isArray(aggregateContext.dataRecords)) {
+    return aggregateContext.dataRecords
+  }
+
+  if (scope === 'parent' && !source) {
+    if (Array.isArray(parentContext?.record)) return parentContext.record
+    return parentContext?.record === undefined ? [] : [parentContext.record]
+  }
+
+  if (scope === 'document') {
+    return getDocumentAggregateRecords(state, settings)
+  }
+
+  if (source) {
+    const value = scope === 'parent'
+      ? resolveAggregatePathValue(
+        source,
+        parentContext?.valueContext,
+        parentContext?.record,
+        dataContext?.valueContext,
+        state.rootContext.rootValues
+      )
+      : resolveAggregatePathValue(
+        source,
+        dataContext?.valueContext,
+        dataContext?.record,
+        parentContext?.valueContext,
+        state.rootContext.rootValues
+      )
+
+    return getDataEntriesFromValue(value)
+  }
+
+  const bandType = getNormalizedBandType(aggregateContext.band?.type)
+
+  if (scope === 'auto') {
+    if (['group-header', 'group-footer'].includes(bandType) && Array.isArray(aggregateContext.groupRecords)) {
+      return aggregateContext.groupRecords
+    }
+
+    if (['data', 'data-header', 'data-footer', 'continuation'].includes(bandType) && Array.isArray(aggregateContext.dataRecords)) {
+      return aggregateContext.dataRecords
+    }
+  }
+
+  return getDocumentAggregateRecords(state, settings)
+}
+
+function getAggregateFieldValue(record, field) {
+  const fieldPath = String(field || '').trim()
+
+  if (fieldPath) return getDataValueByPath(record, fieldPath)
+  if (record && typeof record === 'object') return record.value
+
+  return record
+}
+
+function getAggregateNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+
+  if (typeof value === 'string') {
+    const normalized = value
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/,(?=\d{1,2}$)/, '.')
+      .replace(/[^0-9.+-]/g, '')
+    const numeric = Number(normalized)
+
+    return Number.isFinite(numeric) ? numeric : null
+  }
+
+  return null
+}
+
+function formatAggregateValue(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value !== 'number') return String(value)
+  if (!Number.isFinite(value)) return ''
+  if (Number.isInteger(value)) return String(value)
+
+  return String(Number(value.toFixed(4)))
+}
+
+function getAggregateComparableValues(records, field) {
+  return records
+    .map(record => getAggregateFieldValue(record, field))
+    .filter(value => value !== null && value !== undefined && value !== '')
+}
+
+function calculateAggregateValue(records, settings) {
+  const fn = getNormalizedAggregateFunction(settings?.function)
+  const field = String(settings?.field || '').trim()
+  const values = getAggregateComparableValues(records, field)
+
+  if (fn === 'COUNT') {
+    return field ? values.length : records.length
+  }
+
+  const numericValues = values
+    .map(getAggregateNumber)
+    .filter(value => value !== null)
+
+  if (['SUM', 'AVG'].includes(fn)) {
+    const sum = numericValues.reduce((total, value) => total + value, 0)
+
+    return fn === 'AVG'
+      ? (numericValues.length ? sum / numericValues.length : 0)
+      : sum
+  }
+
+  if (!values.length) return ''
+
+  if (numericValues.length === values.length) {
+    return fn === 'MIN'
+      ? Math.min(...numericValues)
+      : Math.max(...numericValues)
+  }
+
+  const sortedValues = values.map(value => String(value)).sort((a, b) => a.localeCompare(b))
+
+  return fn === 'MIN' ? sortedValues[0] : sortedValues[sortedValues.length - 1]
+}
+
+function applyAggregateValuesToElements(elements, state, aggregateContext = {}) {
+  const result = {
+    matched: 0,
+    changed: 0
+  }
+  const visit = item => {
+    if (!item || typeof item !== 'object') return
+
+    if (canElementHaveAggregate(item)) {
+      ensureAggregateSettings(item)
+
+      if (item.aggregate.enabled) {
+        const records = resolveAggregateSourceRecords(state, item.aggregate, aggregateContext)
+        const value = calculateAggregateValue(records, item.aggregate)
+
+        setTemplateTextValue(item, formatAggregateValue(value))
+        result.matched += 1
+        result.changed += 1
+      }
+    }
+
+    if (Array.isArray(item.cells)) {
+      item.cells.forEach(cell => {
+        if (!cell?.repeatGeneratedFrom) visit(cell)
+      })
+    }
+
+    if (Array.isArray(item.children)) item.children.forEach(visit)
+  }
+
+  elements.forEach(visit)
+
+  return result
+}
+
+function singularizeDataSourceSegment(value) {
+  const segment = String(value || '').trim()
+
+  if (!segment) return 'record'
+  if (segment.endsWith('ies') && segment.length > 3) return `${segment.slice(0, -3)}y`
+  if (segment.endsWith('s') && !segment.endsWith('ss') && segment.length > 1) return segment.slice(0, -1)
+
+  return segment
+}
+
+function getDataBandRecordAlias(band) {
+  const source = String(band?.dataSource || '').trim()
+  const segment = source.split('.').filter(Boolean).pop()
+
+  return singularizeDataSourceSegment(segment)
+}
+
+function createBandValueContext(rootValues, record, aliases = {}, alias = '') {
+  const context = isPlainObjectValue(rootValues) ? { ...rootValues } : { value: rootValues }
+
+  Object.assign(context, aliases)
+
+  if (isPlainObjectValue(record)) {
+    Object.assign(context, record)
+  } else if (record !== undefined) {
+    context.value = record
+  }
+
+  if (alias) context[alias] = record
+
+  context.$root = rootValues
+  context.$record = record
+
+  return context
+}
+
+function createRootBandDataContext(values) {
+  return {
+    rootValues: values,
+    record: values,
+    parentRecord: null,
+    aliases: {},
+    valueContext: createBandValueContext(values, values)
+  }
+}
+
+function createChildBandDataContext(parentContext, record, band) {
+  const alias = getDataBandRecordAlias(band)
+  const aliases = { ...(parentContext?.aliases || {}) }
+
+  if (alias) aliases[alias] = record
+
+  return {
+    rootValues: parentContext.rootValues,
+    record,
+    parentRecord: parentContext.record,
+    aliases,
+    valueContext: createBandValueContext(parentContext.rootValues, record, aliases, alias)
+  }
+}
+
+function resolveDataBandSourceValue(band, context) {
+  const source = String(band?.dataSource || '').trim()
+
+  if (!source) return context?.record ?? context?.rootValues
+
+  return [
+    getDataValueByPath(context?.valueContext, source),
+    getDataValueByPath(context?.record, source),
+    getDataValueByPath(context?.rootValues, source)
+  ].find(value => value !== undefined)
+}
+
+function getDataBandEntries(band, context) {
+  return getDataEntriesFromValue(resolveDataBandSourceValue(band, context))
+}
+
+function getEnabledBandsByTypes(types) {
+  const typeSet = new Set(types)
+
+  return bands.value.filter(band => band?.enabled && typeSet.has(getNormalizedBandType(band.type)))
+}
+
+function sortBandsByDocumentOrder(bandList = []) {
+  return [...bandList].sort((a, b) => (
+    bands.value.findIndex(band => String(band.id) === String(a.id)) -
+    bands.value.findIndex(band => String(band.id) === String(b.id))
+  ))
+}
+
+function getEnabledDataBands() {
+  return getEnabledBandsByTypes(['data'])
+}
+
+function getRootDataBands() {
+  return sortBandsByDocumentOrder(getEnabledDataBands().filter(band => !getBandParentDataBandId(band)))
+}
+
+function getRootFlowBands() {
+  return sortBandsByDocumentOrder(bands.value.filter(band => {
+    if (!band?.enabled || getBandParentDataBandId(band)) return false
+
+    return ['data', 'spacer', 'break'].includes(getNormalizedBandType(band.type))
+  }))
+}
+
+function getChildFlowBands(dataBand) {
+  const parentId = String(dataBand?.id || '')
+
+  return sortBandsByDocumentOrder(bands.value.filter(band => {
+    if (!band?.enabled || getBandParentDataBandId(band) !== parentId) return false
+
+    return ['data', 'spacer', 'break'].includes(getNormalizedBandType(band.type))
+  }))
+}
+
+function getDataScopedBands(dataBand, types, options = {}) {
+  const parentId = String(dataBand?.id || '')
+  const dataBandCount = getEnabledDataBands().length
+
+  return sortBandsByDocumentOrder(getEnabledBandsByTypes(types).filter(band => {
+    const scopedParentId = getBandParentDataBandId(band)
+
+    if (scopedParentId) return scopedParentId === parentId
+
+    return Boolean(options.allowSingleDataBandFallback && dataBandCount === 1)
+  }))
+}
+
+function getContinuationBands(dataBand = null) {
+  const parentId = String(dataBand?.id || '')
+  const scopedBands = getEnabledBandsByTypes(['continuation']).filter(band => (
+    getBandParentDataBandId(band) === parentId
+  ))
+
+  if (scopedBands.length) return sortBandsByDocumentOrder(scopedBands)
+
+  return sortBandsByDocumentOrder(getEnabledBandsByTypes(['continuation']).filter(band => (
+    !getBandParentDataBandId(band)
+  )))
+}
+
+function getDataBandGroupBy(dataBand) {
+  const groupBands = getDataScopedBands(dataBand, ['group-header', 'group-footer'], {
+    allowSingleDataBandFallback: true
+  })
+  const groupBandWithPath = groupBands.find(band => String(band.groupBy || '').trim())
+
+  return String(groupBandWithPath?.groupBy || dataBand?.groupBy || '').trim()
+}
+
+function getBandSegmentForCanvasPage(band, page, pageIndex, pageCount) {
+  return getBandLayoutSegments(
+    getPageConfigForCanvasPage(page),
+    pageIndex,
+    pageCount,
+    { includeDuringExport: true }
+  ).find(segment => String(segment.band?.id) === String(band?.id)) || null
+}
+
+function getBandSourceColumnSegment(band, item, pageIndex, page = null, pageCount = pages.value.length) {
+  const segment = page
+    ? getBandSegmentForCanvasPage(band, page, pageIndex, pageCount)
+    : getBandSegmentForPageIndex(band, pageIndex)
+  const columns = getBandColumnSegments(segment)
+  const columnIndex = clampNumber(
+    Math.round(Number(item?.bandColumnIndex) || 0),
+    0,
+    Math.max(0, columns.length - 1)
+  )
+
+  return columns[columnIndex] || segment
+}
+
+function collectBandTemplateEntries(sourcePages = pages.value) {
+  const entriesByBandId = new Map()
+
+  sourcePages.forEach((page, pageIndex) => {
+    if (!Array.isArray(page?.elements)) return
+
+    page.elements.forEach(item => {
+      if (!item || item.bandSyncedClone || item.bandGeneratedInstance || !item.bandId) return
+
+      const band = getBandById(item.bandId)
+      const sourceSegment = band
+        ? getBandSourceColumnSegment(band, item, pageIndex, page, sourcePages.length)
+        : null
+
+      if (!band || !sourceSegment) return
+
+      const entries = entriesByBandId.get(band.id) || []
+
+      entries.push({
+        band,
+        item,
+        sourcePage: page,
+        sourcePageIndex: pageIndex,
+        sourceSegment,
+        columnIndex: Math.max(0, Math.round(Number(item.bandColumnIndex) || 0)),
+        offsetX: getItemCoordinate(item, 'x') - sourceSegment.x,
+        offsetY: getItemCoordinate(item, 'y') - sourceSegment.y
+      })
+      entriesByBandId.set(band.id, entries)
+    })
+  })
+
+  return entriesByBandId
+}
+
+function collectUnbandedTemplateEntries(sourcePages = pages.value) {
+  return sourcePages.map(page => (
+    Array.isArray(page?.elements)
+      ? page.elements.filter(item => (
+        item &&
+        !item.bandId &&
+        !item.bandSyncedClone &&
+        !item.bandGeneratedInstance
+      ))
+      : []
+  ))
+}
+
+function getRenderedPageTemplatePage(templatePages, pageIndex) {
+  return templatePages[Math.min(pageIndex, Math.max(0, templatePages.length - 1))] ||
+    templatePages[0] ||
+    createCanvasPage('Page 1')
+}
+
+function createRenderedCanvasPage(templatePages, pageIndex) {
+  const templatePage = getRenderedPageTemplatePage(templatePages, pageIndex)
+  const page = createCanvasPage(`Page ${pageIndex + 1}`, {
+    orientation: templatePage.orientation,
+    columns: templatePage.columns,
+    watermark: templatePage.watermark
+  })
+
+  page.watermark = clonePageWatermarkSettings(templatePage.watermark)
+  page.generatedFromDataBands = true
+
+  return page
+}
+
+function getRenderPageColumns(page, pageConfig) {
+  const settings = getClampedPageColumnSettings(page?.columns, page?.orientation)
+
+  if (settings.count <= 1) {
+    return [{
+      index: 0,
+      x: pageConfig.x,
+      width: pageConfig.width,
+      right: pageConfig.x + pageConfig.width
+    }]
+  }
+
+  const bounds = getPageContentBoundsPixels(pageConfig)
+  const gap = Math.max(0, settings.gapInches * PX_PER_INCH)
+  const columnWidth = Math.max(1, (bounds.width - gap * (settings.count - 1)) / settings.count)
+
+  return Array.from({ length: settings.count }, (_, index) => {
+    const x = bounds.x + index * (columnWidth + gap)
+
+    return {
+      index,
+      x,
+      width: columnWidth,
+      right: x + columnWidth
+    }
+  })
+}
+
+function getRenderPageLayout(page, pageIndex, options = {}) {
+  const pageConfigForRender = getPageConfigForCanvasPage(page)
+  const staticBandTypes = [
+    ...(options.includeDocumentHeader ? ['document-header'] : []),
+    'page-header',
+    'page-footer',
+    ...(options.includeDocumentFooter ? ['document-footer'] : [])
+  ]
+  const pageBands = getEnabledBandsByTypes(staticBandTypes)
+  const pageBandSegments = getBandLayoutSegments(pageConfigForRender, pageIndex, pageIndex + 1, {
+    bandList: pageBands
+  })
+  const topY = pageBandSegments
+    .filter(segment => segment.kind === 'top')
+    .reduce((value, segment) => Math.max(value, segment.y + segment.height), pageConfigForRender.y)
+  const bottomY = pageBandSegments
+    .filter(segment => segment.kind === 'bottom')
+    .reduce((value, segment) => Math.min(value, segment.y), pageConfigForRender.y + pageConfigForRender.height)
+
+  return {
+    pageConfig: pageConfigForRender,
+    pageBandSegments,
+    topY,
+    bottomY,
+    bodyHeight: Math.max(1, bottomY - topY),
+    columns: getRenderPageColumns(page, pageConfigForRender)
+  }
+}
+
+function getCurrentRenderColumn(state) {
+  return state.layout.columns[state.columnIndex] || state.layout.columns[0]
+}
+
+function getCurrentRenderFlowBounds(state, band, height) {
+  const bandBounds = getBandBoundsForPageConfig(state.pageConfig, band)
+  const column = getCurrentRenderColumn(state)
+
+  if (state.layout.columns.length <= 1) {
+    return {
+      x: bandBounds.x,
+      y: state.cursorY,
+      width: bandBounds.width,
+      height
+    }
+  }
+
+  const x = Math.max(bandBounds.x, column.x)
+  const right = Math.min(bandBounds.x + bandBounds.width, column.right)
+
+  return {
+    x,
+    y: state.cursorY,
+    width: Math.max(1, right - x || column.width),
+    height
+  }
+}
+
+function getTargetColumnSegmentForEntry(band, baseSegment, entry) {
+  const columns = getBandColumnSegments(baseSegment)
+  const columnIndex = clampNumber(
+    Math.round(Number(entry?.columnIndex) || 0),
+    0,
+    Math.max(0, columns.length - 1)
+  )
+
+  return columns[columnIndex] || baseSegment
+}
+
+function getRenderRemainingHeight(state) {
+  return Math.max(0, state.layout.bottomY - state.cursorY)
+}
+
+function isAtRenderColumnStart(state) {
+  return Math.abs(state.cursorY - state.layout.topY) < 0.5
+}
+
+function isAtRenderPageStart(state) {
+  return state.columnIndex === 0 && isAtRenderColumnStart(state)
+}
+
+function canAdvanceRenderColumn(state, height) {
+  if (state.columnIndex >= state.layout.columns.length - 1) return false
+  if (isAtRenderColumnStart(state) && height > state.layout.bodyHeight) return false
+
+  return true
+}
+
+function advanceRenderColumn(state) {
+  state.columnIndex += 1
+  state.cursorY = state.layout.topY
+}
+
+function cloneCanvasPagesForDataBandTemplate(sourcePages = pages.value) {
+  return sourcePages.map(page => ({
+    id: page.id,
+    name: page.name,
+    orientation: getNormalizedPageOrientation(page.orientation),
+    columns: getClampedPageColumnSettings(page.columns, page.orientation),
+    watermark: clonePageWatermarkSettings(page.watermark),
+    elements: Array.isArray(page.elements)
+      ? page.elements.map(item => cloneCanvasItem(item))
+      : []
+  }))
+}
+
+function getCanvasModePageClone(sourcePages = pages.value) {
+  return cloneCanvasPagesForDataBandTemplate(sourcePages)
+}
+
+function getActivePageIdFromPageList(pageList = [], preferredPageId = '') {
+  const preferredId = String(preferredPageId || '').trim()
+
+  return pageList.some(page => String(page?.id || '') === preferredId)
+    ? preferredId
+    : String(pageList[0]?.id || '')
+}
+
+function clearPreviewModeSnapshot() {
+  previewModePages = null
+  previewModeActivePageId = ''
+  previewModeVersion.value += 1
+}
+
+function snapshotCurrentCanvasMode() {
+  if (isPreviewMode.value) {
+    previewModePages = getCanvasModePageClone(pages.value)
+    previewModeActivePageId = activePageId.value
+    previewModeVersion.value += 1
+    return
+  }
+
+  designModePages = getCanvasModePageClone(pages.value)
+  designModeActivePageId = activePageId.value
+  dataBandRenderTemplatePages = getCanvasModePageClone(pages.value)
+}
+
+function renderRestoredCanvasModePages(restoredPages) {
+  nextTick(() => {
+    restoredPages.forEach(page => {
+      loadPageWatermarkImage(page)
+      page.elements.forEach(renderImportedRichTextImages)
+    })
+    updateTransformerSelection()
+  })
+}
+
+function restoreCanvasModePages(sourcePages, preferredActivePageId = '') {
+  const restoredPages = getCanvasModePageClone(sourcePages)
+
+  if (!restoredPages.length) return
+
+  resetCanvasInteractionState()
+  pages.value = restoredPages
+  activePageId.value = getActivePageIdFromPageList(restoredPages, preferredActivePageId)
+  canvasVersion += 1
+  renderRestoredCanvasModePages(restoredPages)
+}
+
+function getCanvasModePagesForRendering() {
+  if (isPreviewMode.value && designModePages?.length) {
+    return designModePages
+  }
+
+  designModePages = getCanvasModePageClone(pages.value)
+  designModeActivePageId = activePageId.value
+  dataBandRenderTemplatePages = getCanvasModePageClone(pages.value)
+
+  return designModePages
+}
+
+function setRenderedPreviewPages(renderedPages = []) {
+  const nextPages = getCanvasModePageClone(renderedPages)
+
+  previewModePages = getCanvasModePageClone(nextPages)
+  previewModeActivePageId = getActivePageIdFromPageList(nextPages, nextPages[0]?.id)
+  previewModeVersion.value += 1
+  canvasMode.value = CANVAS_MODE_PREVIEW
+  resetCanvasInteractionState()
+  pages.value = nextPages
+  activePageId.value = previewModeActivePageId
+  canvasVersion += 1
+}
+
+function setCanvasMode(mode) {
+  const nextMode = mode === CANVAS_MODE_PREVIEW
+    ? CANVAS_MODE_PREVIEW
+    : CANVAS_MODE_DESIGN
+
+  if (nextMode === canvasMode.value) return
+
+  if (nextMode === CANVAS_MODE_PREVIEW && !previewModePages?.length) {
+    templateValuesImportMessage.value = 'Fill Template JSON to create a preview.'
+    return
+  }
+
+  snapshotCurrentCanvasMode()
+  canvasMode.value = nextMode
+
+  if (nextMode === CANVAS_MODE_PREVIEW) {
+    restoreCanvasModePages(previewModePages, previewModeActivePageId)
+    return
+  }
+
+  restoreCanvasModePages(designModePages || dataBandRenderTemplatePages || pages.value, designModeActivePageId)
+}
+
+function getDataBandRenderTemplatePages() {
+  if (isPreviewMode.value && designModePages?.length) {
+    return designModePages
+  }
+
+  const currentPagesAreGenerated = pages.value.some(page => page?.generatedFromDataBands)
+
+  if (!currentPagesAreGenerated || !dataBandRenderTemplatePages) {
+    dataBandRenderTemplatePages = cloneCanvasPagesForDataBandTemplate(pages.value)
+  }
+
+  return dataBandRenderTemplatePages
+}
+
+function createBandDataRenderState(values, sourcePages = pages.value) {
+  const templatePages = cloneCanvasPagesForDataBandTemplate(sourcePages)
+
+  return {
+    rootContext: createRootBandDataContext(values),
+    templatePages,
+    templateEntries: collectBandTemplateEntries(templatePages),
+    unbandedTemplateEntries: collectUnbandedTemplateEntries(templatePages),
+    outputPages: [],
+    usedIds: new Set(),
+    imageElements: [],
+    matched: 0,
+    changed: 0,
+    renderedElementCount: 0,
+    renderedRecords: 0,
+    currentPage: null,
+    currentPageIndex: -1,
+    pageConfig: null,
+    layout: null,
+    cursorY: 0,
+    columnIndex: 0
+  }
+}
+
+function getBandInstanceBaseHeight(band, contextValues) {
+  if (getNormalizedBandType(band?.type) !== 'spacer') return getBandHeight(band)
+
+  const source = String(band?.dataSource || '').trim()
+  const sourceValue = source ? getDataValueByPath(contextValues, source) : undefined
+  const numericValue = Number(sourceValue)
+
+  return Number.isFinite(numericValue)
+    ? clampNumber(Math.round(numericValue), 0, 2000)
+    : getBandHeight(band)
+}
+
+function cloneBandTemplateEntry(entry, state) {
+  const item = cloneCanvasItem(entry.item)
+
+  assignClonedCanvasItemIds(item, state.usedIds)
+  clearRepeatedBandElementMetadata(item)
+  item.bandId = entry.band.id
+  item.bandColumnIndex = entry.columnIndex
+  item.bandGeneratedInstance = true
+  ensureSelectableItemSettings(item)
+
+  return item
+}
+
+function measurePreparedBandInstanceHeight(instance) {
+  const contentHeight = instance.items.reduce((height, pair) => {
+    const rect = getFallbackElementRectForPosition(pair.item, {
+      x: getItemCoordinate(pair.item, 'x'),
+      y: getItemCoordinate(pair.item, 'y')
+    })
+
+    if (!rect) return height
+
+    return Math.max(height, rect.y + rect.height - pair.entry.sourceSegment.y)
+  }, 0)
+
+  return Math.max(0, Math.ceil(Math.max(instance.baseHeight, contentHeight)))
+}
+
+function createPreparedBandInstance(state, band, contextValues = {}, options = {}) {
+  const entries = state.templateEntries.get(band?.id) || []
+  const items = entries.map(entry => ({
+    entry,
+    item: cloneBandTemplateEntry(entry, state)
+  }))
+  const elements = items.map(pair => pair.item)
+  const result = elements.length
+    ? applyTemplateVariablesToElements(elements, contextValues)
+    : { matched: 0, changed: 0, imageElements: [] }
+  const aggregateResult = elements.length
+    ? applyAggregateValuesToElements(elements, state, {
+      ...options,
+      band
+    })
+    : { matched: 0, changed: 0 }
+  const instance = {
+    band,
+    items,
+    elements,
+    baseHeight: getBandInstanceBaseHeight(band, contextValues),
+    matched: result.matched + aggregateResult.matched,
+    changed: result.changed + aggregateResult.changed,
+    imageElements: result.imageElements
+  }
+
+  instance.height = measurePreparedBandInstanceHeight(instance)
+
+  return instance
+}
+
+function placePreparedBandInstanceAtSegment(state, instance, baseSegment, options = {}) {
+  instance.items.forEach(pair => {
+    const targetSegment = getTargetColumnSegmentForEntry(instance.band, baseSegment, pair.entry)
+
+    pair.item.x = targetSegment.x + pair.entry.offsetX
+    pair.item.y = targetSegment.y + pair.entry.offsetY
+    pair.item.bandId = instance.band.id
+    pair.item.bandColumnIndex = pair.entry.columnIndex
+    pair.item.bandGeneratedInstance = true
+    ensureSelectableItemSettings(pair.item)
+  })
+
+  state.currentPage.elements.push(...instance.elements)
+  state.matched += instance.matched
+  state.changed += instance.changed
+  state.renderedElementCount += instance.elements.length
+  state.imageElements.push(...instance.imageElements)
+
+  if (options.advanceCursor !== false) {
+    state.cursorY += instance.height
+  }
+}
+
+function placePreparedBandInstanceInFlow(state, instance, options = {}) {
+  const baseSegment = getCurrentRenderFlowBounds(state, instance.band, instance.height)
+
+  placePreparedBandInstanceAtSegment(state, instance, baseSegment, options)
+}
+
+function renderUnbandedTemplateElementsToCurrentPage(state) {
+  const sourceItems = state.unbandedTemplateEntries[state.currentPageIndex] || []
+
+  if (!sourceItems.length) return
+
+  const items = sourceItems.map(item => {
+    const clone = cloneCanvasItem(item)
+
+    assignClonedCanvasItemIds(clone, state.usedIds)
+    clone.bandId = ''
+    clone.bandColumnIndex = 0
+    clearRepeatedBandElementMetadata(clone)
+    ensureSelectableItemSettings(clone)
+
+    return clone
+  })
+  const result = applyTemplateVariablesToElements(items, state.rootContext.valueContext)
+  const aggregateResult = applyAggregateValuesToElements(items, state, {
+    band: null,
+    context: state.rootContext
+  })
+
+  state.currentPage.elements.push(...items)
+  state.matched += result.matched + aggregateResult.matched
+  state.changed += result.changed + aggregateResult.changed
+  state.renderedElementCount += items.length
+  state.imageElements.push(...result.imageElements)
+}
+
+function renderStaticPageBandsToCurrentPage(state, options = {}) {
+  const bandTypes = options.bandTypes || ['page-header', 'page-footer']
+  const pageBands = getEnabledBandsByTypes(bandTypes)
+
+  pageBands.forEach(band => {
+    const targetSegment = state.layout.pageBandSegments.find(segment => (
+      String(segment.band?.id) === String(band.id)
+    ))
+
+    if (!targetSegment) return
+
+    const instance = createPreparedBandInstance(state, band, state.rootContext.valueContext, {
+      context: state.rootContext
+    })
+
+    placePreparedBandInstanceAtSegment(state, instance, targetSegment, {
+      advanceCursor: false
+    })
+  })
+}
+
+function createRenderPage(state, options = {}) {
+  const pageIndex = state.outputPages.length
+  const page = createRenderedCanvasPage(state.templatePages, pageIndex)
+  const includeDocumentHeader = pageIndex === 0
+
+  state.outputPages.push(page)
+  state.currentPage = page
+  state.currentPageIndex = pageIndex
+  state.pageConfig = getPageConfigForCanvasPage(page)
+  state.layout = getRenderPageLayout(page, pageIndex, {
+    includeDocumentHeader
+  })
+  state.cursorY = state.layout.topY
+  state.columnIndex = 0
+
+  renderUnbandedTemplateElementsToCurrentPage(state)
+  renderStaticPageBandsToCurrentPage(state, {
+    bandTypes: includeDocumentHeader
+      ? ['document-header', 'page-header', 'page-footer']
+      : ['page-header', 'page-footer']
+  })
+
+  if (options.continuation) {
+    renderContinuationBands(state, options.contextValues || state.rootContext.valueContext, options.dataBand)
+  }
+}
+
+function ensureRenderSpace(state, height, options = {}) {
+  const targetHeight = Math.max(0, Number(height) || 0)
+
+  if (!state.currentPage) {
+    createRenderPage(state)
+  }
+
+  if (targetHeight <= getRenderRemainingHeight(state)) return
+  if (canAdvanceRenderColumn(state, targetHeight)) {
+    advanceRenderColumn(state)
+    return
+  }
+
+  if (isAtRenderPageStart(state) && targetHeight > state.layout.bodyHeight) return
+
+  createRenderPage(state, {
+    continuation: options.continuation === true,
+    contextValues: options.contextValues,
+    dataBand: options.dataBand
+  })
+}
+
+function renderPreparedBandInstance(state, instance, options = {}) {
+  if (options.ensureSpace !== false) {
+    ensureRenderSpace(state, instance.height, options)
+  }
+
+  placePreparedBandInstanceInFlow(state, instance)
+}
+
+function renderBandInstance(state, band, contextValues = {}, options = {}) {
+  const instance = createPreparedBandInstance(state, band, contextValues, options)
+
+  renderPreparedBandInstance(state, instance, options)
+
+  return instance
+}
+
+function renderContinuationBands(state, contextValues = {}, dataBand = null) {
+  getContinuationBands(dataBand).forEach(band => {
+    renderBandInstance(state, band, contextValues, {
+      ensureSpace: false,
+      context: state.rootContext,
+      dataBand
+    })
+  })
+}
+
+function renderBreakBand(state, band, contextValues = {}, dataBand = null, options = {}) {
+  if (!state.currentPage) {
+    createRenderPage(state)
+  } else if (canAdvanceRenderColumn(state, 0)) {
+    advanceRenderColumn(state)
+  } else if (!isAtRenderPageStart(state)) {
+    createRenderPage(state, {
+      continuation: false,
+      contextValues,
+      dataBand
+    })
+  }
+
+  renderBandInstance(state, band, contextValues, {
+    ensureSpace: false,
+    context: options.context || state.rootContext,
+    dataBand,
+    dataRecords: options.records || options.dataRecords || [],
+    groupRecords: options.groupRecords || [],
+    parentContext: options.parentContext || null
+  })
+}
+
+function getBandInstancesHeight(instances = []) {
+  return instances.reduce((height, instance) => height + instance.height, 0)
+}
+
+function renderPreparedBandInstances(state, instances, options = {}) {
+  instances.forEach(instance => renderPreparedBandInstance(state, instance, options))
+}
+
+function renderDataBandHeader(state, dataBand, context, records = []) {
+  const headerBands = getDataScopedBands(dataBand, ['data-header'], {
+    allowSingleDataBandFallback: true
+  })
+
+  return headerBands.map(band => createPreparedBandInstance(state, band, context.valueContext, {
+    context,
+    dataBand,
+    dataRecords: records,
+    parentContext: context
+  }))
+}
+
+function renderDataBandFooter(state, dataBand, context, records = []) {
+  const footerBands = getDataScopedBands(dataBand, ['data-footer'], {
+    allowSingleDataBandFallback: true
+  })
+
+  footerBands.forEach(band => {
+    renderBandInstance(state, band, context.valueContext, {
+      continuation: true,
+      contextValues: context.valueContext,
+      context,
+      dataBand,
+      dataRecords: records,
+      parentContext: context
+    })
+  })
+}
+
+function getRecordGroupValue(dataBand, context) {
+  const groupBy = getDataBandGroupBy(dataBand)
+
+  return groupBy ? getDataValueByPath(context.valueContext, groupBy) : undefined
+}
+
+function hasDataBandGrouping(dataBand) {
+  return Boolean(
+    getDataBandGroupBy(dataBand) ||
+    getDataScopedBands(dataBand, ['group-header', 'group-footer'], {
+      allowSingleDataBandFallback: true
+    }).length
+  )
+}
+
+function createGroupHeaderInstances(state, dataBand, context, options = {}) {
+  return getDataScopedBands(dataBand, ['group-header'], {
+    allowSingleDataBandFallback: true
+  }).map(band => createPreparedBandInstance(state, band, context.valueContext, {
+    context,
+    dataBand,
+    dataRecords: options.records || [],
+    groupRecords: options.groupRecords || [],
+    parentContext: options.parentContext || null
+  }))
+}
+
+function renderGroupFooterInstances(state, dataBand, context, options = {}) {
+  getDataScopedBands(dataBand, ['group-footer'], {
+    allowSingleDataBandFallback: true
+  }).forEach(band => {
+    renderBandInstance(state, band, context.valueContext, {
+      continuation: true,
+      contextValues: context.valueContext,
+      context,
+      dataBand,
+      dataRecords: options.records || [],
+      groupRecords: options.groupRecords || [],
+      parentContext: options.parentContext || null
+    })
+  })
+}
+
+function renderChildFlowBand(state, band, context, dataBand, options = {}) {
+  const type = getNormalizedBandType(band?.type)
+
+  if (type === 'data') {
+    return renderDataBand(state, band, context)
+  }
+
+  if (type === 'break') {
+    renderBreakBand(state, band, context.valueContext, dataBand, {
+      context,
+      records: options.records || [],
+      groupRecords: options.groupRecords || [],
+      parentContext: options.parentContext || null
+    })
+    return 0
+  }
+
+  renderBandInstance(state, band, context.valueContext, {
+    continuation: true,
+    contextValues: context.valueContext,
+    context,
+    dataBand,
+    dataRecords: options.records || [],
+    groupRecords: options.groupRecords || [],
+    parentContext: options.parentContext || null
+  })
+
+  return 0
+}
+
+function renderDataBandRecordChildren(state, dataBand, context, options = {}) {
+  getChildFlowBands(dataBand).forEach(band => {
+    renderChildFlowBand(state, band, context, dataBand, options)
+  })
+}
+
+function getGroupRecordsForKey(dataBand, parentContext, records, groupKey) {
+  if (!records.length) return []
+
+  return records.filter(record => {
+    const recordContext = createChildBandDataContext(parentContext, record, dataBand)
+    const recordGroupKey = getRecordGroupValue(dataBand, recordContext)
+
+    return String(recordGroupKey ?? '') === String(groupKey ?? '')
+  })
+}
+
+function getFirstRecordLeadHeight(state, dataBand, parentContext, recordContext, records = [], groupRecords = []) {
+  const rowInstance = createPreparedBandInstance(state, dataBand, recordContext.valueContext, {
+    context: recordContext,
+    dataBand,
+    dataRecords: records,
+    groupRecords,
+    parentContext
+  })
+  const groupHeaderInstances = hasDataBandGrouping(dataBand)
+    ? createGroupHeaderInstances(state, dataBand, recordContext, {
+      records,
+      groupRecords,
+      parentContext
+    })
+    : []
+
+  return rowInstance.height + getBandInstancesHeight(groupHeaderInstances)
+}
+
+function renderDataBand(state, dataBand, parentContext) {
+  const records = getDataBandEntries(dataBand, parentContext)
+
+  if (!records.length) return 0
+
+  const firstRecordContext = createChildBandDataContext(parentContext, records[0], dataBand)
+  const firstGroupKey = hasDataBandGrouping(dataBand)
+    ? getRecordGroupValue(dataBand, firstRecordContext)
+    : null
+  const firstGroupRecords = firstGroupKey === null
+    ? records
+    : getGroupRecordsForKey(dataBand, parentContext, records, firstGroupKey)
+  const headerInstances = renderDataBandHeader(state, dataBand, parentContext, records)
+  const keepWithFirstRowHeight = getBandInstancesHeight(headerInstances) +
+    getFirstRecordLeadHeight(state, dataBand, parentContext, firstRecordContext, records, firstGroupRecords)
+
+  ensureRenderSpace(state, keepWithFirstRowHeight, {
+    continuation: false
+  })
+  renderPreparedBandInstances(state, headerInstances, {
+    ensureSpace: false
+  })
+
+  let renderedRecords = 0
+  let previousGroupKey = null
+  let previousGroupContext = null
+  let previousGroupRecords = []
+  const grouped = hasDataBandGrouping(dataBand)
+
+  records.forEach(record => {
+    const recordContext = createChildBandDataContext(parentContext, record, dataBand)
+    const groupKey = grouped ? getRecordGroupValue(dataBand, recordContext) : null
+    const isNewGroup = grouped && (
+      renderedRecords === 0 ||
+      String(groupKey ?? '') !== String(previousGroupKey ?? '')
+    )
+    const groupRecords = grouped
+      ? getGroupRecordsForKey(dataBand, parentContext, records, groupKey)
+      : records
+    const rowInstance = createPreparedBandInstance(state, dataBand, recordContext.valueContext, {
+      context: recordContext,
+      dataBand,
+      dataRecords: records,
+      groupRecords,
+      parentContext
+    })
+
+    if (isNewGroup && renderedRecords > 0 && previousGroupContext) {
+      renderGroupFooterInstances(state, dataBand, previousGroupContext, {
+        records,
+        groupRecords: previousGroupRecords,
+        parentContext
+      })
+    }
+
+    if (isNewGroup) {
+      const groupHeaderInstances = createGroupHeaderInstances(state, dataBand, recordContext, {
+        records,
+        groupRecords,
+        parentContext
+      })
+      const keepTogetherHeight = getBandInstancesHeight(groupHeaderInstances) + rowInstance.height
+
+      ensureRenderSpace(state, keepTogetherHeight, {
+        continuation: true,
+        contextValues: recordContext.valueContext,
+        dataBand
+      })
+      renderPreparedBandInstances(state, groupHeaderInstances, {
+        ensureSpace: false
+      })
+    } else {
+      ensureRenderSpace(state, rowInstance.height, {
+        continuation: true,
+        contextValues: recordContext.valueContext,
+        dataBand
+      })
+    }
+
+    renderPreparedBandInstance(state, rowInstance, {
+      ensureSpace: false
+    })
+    renderDataBandRecordChildren(state, dataBand, recordContext, {
+      records,
+      groupRecords,
+      parentContext
+    })
+
+    renderedRecords += 1
+    state.renderedRecords += 1
+    previousGroupKey = groupKey
+    previousGroupContext = recordContext
+    previousGroupRecords = groupRecords
+  })
+
+  if (grouped && previousGroupContext) {
+    renderGroupFooterInstances(state, dataBand, previousGroupContext, {
+      records,
+      groupRecords: previousGroupRecords,
+      parentContext
+    })
+  }
+
+  renderDataBandFooter(state, dataBand, parentContext, records)
+
+  return renderedRecords
+}
+
+function renderDocumentStartBands(state) {
+  getEnabledBandsByTypes(['document-header']).forEach(band => {
+    renderBandInstance(state, band, state.rootContext.valueContext, {
+      continuation: false,
+      context: state.rootContext
+    })
+  })
+}
+
+function removeGeneratedBandInstancesFromPage(page, bandTypes = []) {
+  const typeSet = new Set(bandTypes)
+
+  if (!page || !Array.isArray(page.elements) || !typeSet.size) return
+
+  page.elements = page.elements.filter(item => {
+    if (!item?.bandGeneratedInstance) return true
+
+    const band = getBandById(item.bandId)
+
+    return !typeSet.has(getNormalizedBandType(band?.type))
+  })
+}
+
+function renderDocumentEndBands(state) {
+  const footerBands = getEnabledBandsByTypes(['document-footer'])
+
+  if (!footerBands.length) return
+
+  const footerHeight = getBandInstancesHeight(
+    footerBands.map(band => createPreparedBandInstance(state, band, state.rootContext.valueContext, {
+      context: state.rootContext
+    }))
+  )
+
+  ensureRenderSpace(state, footerHeight, {
+    continuation: false
+  })
+  removeGeneratedBandInstancesFromPage(state.currentPage, ['page-footer', 'document-footer'])
+  state.layout = getRenderPageLayout(state.currentPage, state.currentPageIndex, {
+    includeDocumentHeader: state.currentPageIndex === 0,
+    includeDocumentFooter: true
+  })
+  state.cursorY = Math.min(state.cursorY, state.layout.bottomY)
+  renderStaticPageBandsToCurrentPage(state, {
+    bandTypes: ['page-footer', 'document-footer']
+  })
+}
+
+function renderNoDataBands(state) {
+  getEnabledBandsByTypes(['no-data']).forEach(band => {
+    renderBandInstance(state, band, state.rootContext.valueContext, {
+      continuation: false,
+      context: state.rootContext
+    })
+  })
+}
+
+function renderRootFlowBand(state, band) {
+  const type = getNormalizedBandType(band?.type)
+
+  if (type === 'data') {
+    return renderDataBand(state, band, state.rootContext)
+  }
+
+  if (type === 'break') {
+    renderBreakBand(state, band, state.rootContext.valueContext, null, {
+      context: state.rootContext
+    })
+    return 0
+  }
+
+  renderBandInstance(state, band, state.rootContext.valueContext, {
+    continuation: false,
+    context: state.rootContext
+  })
+
+  return 0
+}
+
+function renderDataBandPages(values, sourcePages = pages.value) {
+  if (!getRootDataBands().length) return null
+
+  const state = createBandDataRenderState(values, sourcePages)
+
+  createRenderPage(state)
+
+  let renderedRecords = 0
+
+  getRootFlowBands().forEach(band => {
+    renderedRecords += renderRootFlowBand(state, band)
+  })
+
+  if (!renderedRecords) {
+    renderNoDataBands(state)
+  }
+
+  renderDocumentEndBands(state)
+
+  return {
+    pages: state.outputPages.length ? state.outputPages : [createRenderedCanvasPage(state.templatePages, 0)],
+    matched: state.matched,
+    changed: state.changed,
+    renderedRecords: state.renderedRecords,
+    renderedElementCount: state.renderedElementCount,
+    imageElements: state.imageElements
+  }
+}
+
 async function applyTemplateValuesData(data) {
   const values = normalizeTemplateValuesPayload(data)
 
@@ -9325,22 +11158,53 @@ async function applyTemplateValuesData(data) {
   if (editingId.value) finishTextEditing()
   if (editingTableCell.value) finishTableCellEditing()
 
-  const templateElements = getAllPageElements()
+  const sourcePages = getCanvasModePagesForRendering()
+  const bandRenderResult = renderDataBandPages(values, sourcePages)
+
+  if (bandRenderResult) {
+    const stats = { failedImages: 0 }
+
+    if (bandRenderResult.imageElements.length) {
+      await loadTemplateValueImages(bandRenderResult.imageElements, stats)
+    }
+
+    setRenderedPreviewPages(bandRenderResult.pages)
+    await nextTick()
+    getAllPageElements().forEach(renderImportedRichTextImages)
+    updateTransformerSelection()
+
+    return {
+      valueCount: Object.keys(values).length,
+      matched: bandRenderResult.matched || bandRenderResult.renderedRecords,
+      changed: bandRenderResult.changed || bandRenderResult.renderedElementCount,
+      failedImages: stats.failedImages
+    }
+  }
+
+  const previewPages = getCanvasModePageClone(sourcePages)
+  const templateElements = previewPages.flatMap(page => (
+    Array.isArray(page?.elements) ? page.elements : []
+  ))
   const result = applyTemplateVariablesToElements(templateElements, values)
+  const aggregateState = { rootContext: createRootBandDataContext(values) }
+  const aggregateResult = applyAggregateValuesToElements(templateElements, aggregateState, {
+    context: aggregateState.rootContext
+  })
   const stats = { failedImages: 0 }
 
   if (result.imageElements.length) {
     await loadTemplateValueImages(result.imageElements, stats)
   }
 
+  setRenderedPreviewPages(previewPages)
   await nextTick()
-  templateElements.forEach(renderImportedRichTextImages)
+  getAllPageElements().forEach(renderImportedRichTextImages)
   updateTransformerSelection()
 
   return {
     valueCount: Object.keys(values).length,
-    matched: result.matched,
-    changed: result.changed,
+    matched: result.matched + aggregateResult.matched,
+    changed: result.changed + aggregateResult.changed,
     failedImages: stats.failedImages
   }
 }
@@ -9699,6 +11563,12 @@ async function importLayoutData(data) {
     throw new Error('Choose a valid layout JSON file.')
   }
 
+  dataBandRenderTemplatePages = null
+  designModePages = null
+  designModeActivePageId = ''
+  clearPreviewModeSnapshot()
+  canvasMode.value = CANVAS_MODE_DESIGN
+
   const stats = { failedImages: 0 }
   const usedPageIds = new Set()
   const nextPages = await Promise.all(layoutPages.map(async (page, index) => {
@@ -9731,6 +11601,7 @@ async function importLayoutData(data) {
   richRenderVersions.clear()
   pages.value = nextPages
   activePageId.value = activeImportedPage.id
+  designModeActivePageId = activeImportedPage.id
   syncRepeatedBandElements()
   canvasVersion += 1
   await nextTick()
@@ -9797,6 +11668,11 @@ onBeforeUnmount(() => {
     elements,
     pages,
     activePageId,
+    canvasMode,
+    canvasModeOptions,
+    isDesignMode,
+    isPreviewMode,
+    hasPreviewPages,
     bands,
     activeBandId,
     activeBand,
@@ -9927,6 +11803,9 @@ onBeforeUnmount(() => {
     defaultImageSettings,
     defaultTextSettings,
     defaultTableCellSettings,
+    defaultAggregateSettings,
+    aggregateFunctionOptions,
+    aggregateScopeOptions,
     MIN_TABLE_ROWS,
     MAX_TABLE_ROWS,
     MIN_TABLE_COLS,
@@ -9972,6 +11851,7 @@ onBeforeUnmount(() => {
     layerSidebarItems,
     getPageTitle,
     getAllPageElements,
+    setCanvasMode,
     selectPage,
     addPage,
     duplicatePage,
@@ -9984,6 +11864,8 @@ onBeforeUnmount(() => {
     getBandTitle,
     getBandScopeLabel,
     getBandPlacement,
+    getBandParentDataBandId,
+    getParentDataBandOptions,
     getBandInsideCanvasBorders,
     getBandColumnCount,
     getBandColumnGap,
@@ -9993,6 +11875,7 @@ onBeforeUnmount(() => {
     selectBand,
     setBandType,
     setBandHeight,
+    setBandParentDataBandId,
     setBandInsideCanvasBorders,
     setBandColumnCount,
     setBandColumnGap,
@@ -10116,6 +11999,8 @@ onBeforeUnmount(() => {
     getSelectedTableCellRows,
     getSelectedTableRowRepeatVariable,
     setSelectedTableRowRepeatVariable,
+    getSelectedTableCellAggregateValue,
+    setSelectedTableCellsAggregateSetting,
     setSelectedTableCellsStyle,
     cloneTableCellStyle,
     fillMissingTableCells,
@@ -10188,6 +12073,7 @@ onBeforeUnmount(() => {
     setTextLineHeight,
     setTextLetterSpacing,
     setLabelFontSize,
+    setElementAggregateSetting,
     canShapeHaveFill,
     canShapeHaveCornerRadius,
     getShapeStrokeWidthMin,

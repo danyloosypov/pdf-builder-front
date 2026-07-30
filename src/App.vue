@@ -16,7 +16,24 @@ export default {
 
 <template>
   <div class="layout">
-    <div class="toolbar">
+    <div class="toolbar" :class="{ 'is-preview-mode': isPreviewMode }">
+      <div class="mode-panel">
+        <div class="panel-title">Mode</div>
+        <div class="mode-toggle" role="group" aria-label="Canvas mode">
+          <button
+              v-for="option in canvasModeOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: canvasMode === option.value }"
+              :aria-pressed="canvasMode === option.value"
+              :disabled="option.value === 'preview' && !hasPreviewPages && !isPreviewMode"
+              @click="setCanvasMode(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+
       <div class="page-size-panel">
         <div class="panel-title">Canvas Size</div>
 
@@ -253,16 +270,17 @@ export default {
           <input
               :value="activePageName"
               type="text"
+              :disabled="isPreviewMode"
               @input="renamePage(activePageId, $event.target.value)"
           >
         </label>
 
         <div class="page-button-grid">
-          <button type="button" @click="addPage">Add</button>
-          <button type="button" @click="duplicatePage()">Duplicate</button>
+          <button type="button" :disabled="isPreviewMode" @click="addPage">Add</button>
+          <button type="button" :disabled="isPreviewMode" @click="duplicatePage()">Duplicate</button>
           <button
               type="button"
-              :disabled="!hasMultiplePages && !hasCanvasElements"
+              :disabled="isPreviewMode || (!hasMultiplePages && !hasCanvasElements)"
               @click="deletePage()"
           >
             {{ hasMultiplePages ? 'Delete' : 'Clear' }}
@@ -718,14 +736,17 @@ export default {
           </label>
 
           <label class="control-row">
-            <span>Parent Band</span>
-            <select v-model="activeBand.parentBandId" class="control-select">
+            <span>Parent Data Band</span>
+            <select
+                :value="getBandParentDataBandId(activeBand)"
+                class="control-select"
+                @change="setBandParentDataBandId(activeBand, $event.target.value)"
+            >
               <option value="">None</option>
               <option
-                  v-for="band in bands"
+                  v-for="band in getParentDataBandOptions(activeBand)"
                   :key="band.id"
                   :value="band.id"
-                  :disabled="band.id === activeBand.id"
               >
                 {{ getBandTitle(band) }}
               </option>
@@ -1059,7 +1080,7 @@ export default {
       <button
           class="clear-canvas-button"
           type="button"
-          :disabled="!hasCanvasElements"
+          :disabled="isPreviewMode || !hasCanvasElements"
           @click="clearCanvas"
       >
         Clear Canvas
@@ -1365,6 +1386,73 @@ export default {
             >
           </label>
 
+          <label class="checkbox-control">
+            <input
+                :checked="getSelectedTableCellAggregateValue('enabled', false)"
+                type="checkbox"
+                @change="setSelectedTableCellsAggregateSetting('enabled', $event.target.checked)"
+            >
+            <span>Aggregate</span>
+          </label>
+
+          <div
+              v-if="getSelectedTableCellAggregateValue('enabled', false)"
+              class="aggregate-settings"
+          >
+            <label class="control-row">
+              <span>Function</span>
+              <select
+                  :value="getSelectedTableCellAggregateValue('function', 'COUNT')"
+                  class="control-select"
+                  @change="setSelectedTableCellsAggregateSetting('function', $event.target.value)"
+              >
+                <option
+                    v-for="option in aggregateFunctionOptions"
+                    :key="option.value"
+                    :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Scope</span>
+              <select
+                  :value="getSelectedTableCellAggregateValue('scope', 'auto')"
+                  class="control-select"
+                  @change="setSelectedTableCellsAggregateSetting('scope', $event.target.value)"
+              >
+                <option
+                    v-for="option in aggregateScopeOptions"
+                    :key="option.value"
+                    :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Data Source</span>
+              <input
+                  :value="getSelectedTableCellAggregateValue('dataSource', '')"
+                  class="chart-text-input"
+                  type="text"
+                  placeholder="invoice.items"
+                  @input="setSelectedTableCellsAggregateSetting('dataSource', $event.target.value)"
+              >
+            </label>
+            <label class="control-row">
+              <span>Field</span>
+              <input
+                  :value="getSelectedTableCellAggregateValue('field', '')"
+                  class="chart-text-input"
+                  type="text"
+                  placeholder="price"
+                  @input="setSelectedTableCellsAggregateSetting('field', $event.target.value)"
+              >
+            </label>
+          </div>
+
           <div class="chart-color-grid">
             <label>
               <span>Cell</span>
@@ -1530,6 +1618,70 @@ export default {
           >
         </label>
 
+        <label class="checkbox-control">
+          <input
+              :checked="selectedText.aggregate.enabled"
+              type="checkbox"
+              @change="setElementAggregateSetting(selectedText, 'enabled', $event.target.checked)"
+          >
+          <span>Aggregate</span>
+        </label>
+
+        <div v-if="selectedText.aggregate.enabled" class="aggregate-settings">
+          <label class="control-row">
+            <span>Function</span>
+            <select
+                :value="selectedText.aggregate.function"
+                class="control-select"
+                @change="setElementAggregateSetting(selectedText, 'function', $event.target.value)"
+            >
+              <option
+                  v-for="option in aggregateFunctionOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="control-row">
+            <span>Scope</span>
+            <select
+                :value="selectedText.aggregate.scope"
+                class="control-select"
+                @change="setElementAggregateSetting(selectedText, 'scope', $event.target.value)"
+            >
+              <option
+                  v-for="option in aggregateScopeOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="control-row">
+            <span>Data Source</span>
+            <input
+                :value="selectedText.aggregate.dataSource"
+                class="chart-text-input"
+                type="text"
+                placeholder="invoice.items"
+                @input="setElementAggregateSetting(selectedText, 'dataSource', $event.target.value)"
+            >
+          </label>
+          <label class="control-row">
+            <span>Field</span>
+            <input
+                :value="selectedText.aggregate.field"
+                class="chart-text-input"
+                type="text"
+                placeholder="price"
+                @input="setElementAggregateSetting(selectedText, 'field', $event.target.value)"
+            >
+          </label>
+        </div>
+
         <label class="control-row">
           <span>Font Size</span>
           <input
@@ -1636,6 +1788,70 @@ export default {
               placeholder="status_label"
           >
         </label>
+
+        <label class="checkbox-control">
+          <input
+              :checked="selectedLabel.aggregate.enabled"
+              type="checkbox"
+              @change="setElementAggregateSetting(selectedLabel, 'enabled', $event.target.checked)"
+          >
+          <span>Aggregate</span>
+        </label>
+
+        <div v-if="selectedLabel.aggregate.enabled" class="aggregate-settings">
+          <label class="control-row">
+            <span>Function</span>
+            <select
+                :value="selectedLabel.aggregate.function"
+                class="control-select"
+                @change="setElementAggregateSetting(selectedLabel, 'function', $event.target.value)"
+            >
+              <option
+                  v-for="option in aggregateFunctionOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="control-row">
+            <span>Scope</span>
+            <select
+                :value="selectedLabel.aggregate.scope"
+                class="control-select"
+                @change="setElementAggregateSetting(selectedLabel, 'scope', $event.target.value)"
+            >
+              <option
+                  v-for="option in aggregateScopeOptions"
+                  :key="option.value"
+                  :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="control-row">
+            <span>Data Source</span>
+            <input
+                :value="selectedLabel.aggregate.dataSource"
+                class="chart-text-input"
+                type="text"
+                placeholder="invoice.items"
+                @input="setElementAggregateSetting(selectedLabel, 'dataSource', $event.target.value)"
+            >
+          </label>
+          <label class="control-row">
+            <span>Field</span>
+            <input
+                :value="selectedLabel.aggregate.field"
+                class="chart-text-input"
+                type="text"
+                placeholder="price"
+                @input="setElementAggregateSetting(selectedLabel, 'field', $event.target.value)"
+            >
+          </label>
+        </div>
 
         <label class="control-row">
           <span>Text</span>

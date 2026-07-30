@@ -1,3 +1,5 @@
+import { defaultAggregateSettings } from '../constants/pdfBuilderSettings'
+
 function createId() {
   return Date.now()
 }
@@ -30,6 +32,7 @@ export class TextElement extends CanvasElement {
       wrap: 'word',
       draggable: true,
       templateVariable: '',
+      aggregate: { ...defaultAggregateSettings },
       ...config
     })
   }
@@ -192,6 +195,7 @@ export class LabelElement extends CanvasElement {
       borderWidth: 0,
       borderStyle: 'solid',
       templateVariable: '',
+      aggregate: { ...defaultAggregateSettings },
       tag: {
         fill: '#3498db',
         cornerRadius: 4

@@ -251,7 +251,7 @@ function replaceHtmlTextContent(html, replacement) {
   return document.body.innerHTML
 }
 
-function setTemplateTextValue(item, value) {
+export function setTemplateTextValue(item, value) {
   const replacement = value === null || value === undefined ? '' : String(value)
 
   item.text = replacement
@@ -532,7 +532,16 @@ export function normalizeTemplateValuesPayload(payload) {
 
     const arrayVariables = getArrayTemplateValues(objectPayload.variables)
 
-    if (arrayVariables) return arrayVariables
+    if (arrayVariables) {
+      const restValues = Object.fromEntries(
+        Object.entries(objectPayload).filter(([key]) => key !== 'variables')
+      )
+
+      return {
+        ...restValues,
+        ...arrayVariables
+      }
+    }
 
     if (Array.isArray(objectPayload.elements)) return null
 
