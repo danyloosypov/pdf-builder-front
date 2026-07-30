@@ -2,11 +2,13 @@
 import { EditorContent } from '@tiptap/vue-3'
 import { usePdfBuilder } from './composables/usePdfBuilder'
 import CanvasItem from './components/canvas/CanvasItem.vue'
+import ExpressionHelp from './components/ExpressionHelp.vue'
 
 export default {
   components: {
     EditorContent,
-    CanvasItem
+    CanvasItem,
+    ExpressionHelp
   },
   setup() {
     return usePdfBuilder()
@@ -1453,6 +1455,32 @@ export default {
             </label>
           </div>
 
+          <label class="checkbox-control">
+            <input
+                :checked="getSelectedTableCellExpressionValue('enabled', false)"
+                type="checkbox"
+                @change="setSelectedTableCellsExpressionSetting('enabled', $event.target.checked)"
+            >
+            <span>Expression</span>
+          </label>
+
+          <div
+              v-if="getSelectedTableCellExpressionValue('enabled', false)"
+              class="expression-settings"
+          >
+            <ExpressionHelp />
+            <label class="control-row">
+              <span>Formula</span>
+              <textarea
+                  :value="getSelectedTableCellExpressionValue('value', '')"
+                  class="chart-data-input"
+                  rows="3"
+                  placeholder="CONCAT(UPPER(name), ' ', ROUND(price, 2))"
+                  @input="setSelectedTableCellsExpressionSetting('value', $event.target.value)"
+              />
+            </label>
+          </div>
+
           <div class="chart-color-grid">
             <label>
               <span>Cell</span>
@@ -1682,6 +1710,29 @@ export default {
           </label>
         </div>
 
+        <label class="checkbox-control">
+          <input
+              :checked="selectedText.expression.enabled"
+              type="checkbox"
+              @change="setElementExpressionSetting(selectedText, 'enabled', $event.target.checked)"
+          >
+          <span>Expression</span>
+        </label>
+
+        <div v-if="selectedText.expression.enabled" class="expression-settings">
+          <ExpressionHelp />
+          <label class="control-row">
+            <span>Formula</span>
+            <textarea
+                :value="selectedText.expression.value"
+                class="chart-data-input"
+                rows="3"
+                placeholder="CONCAT(UPPER(customer.name), ' / ', FORMAT_DATE(invoice.date, 'YYYY-MM-DD'))"
+                @input="setElementExpressionSetting(selectedText, 'value', $event.target.value)"
+            />
+          </label>
+        </div>
+
         <label class="control-row">
           <span>Font Size</span>
           <input
@@ -1850,6 +1901,29 @@ export default {
                 placeholder="price"
                 @input="setElementAggregateSetting(selectedLabel, 'field', $event.target.value)"
             >
+          </label>
+        </div>
+
+        <label class="checkbox-control">
+          <input
+              :checked="selectedLabel.expression.enabled"
+              type="checkbox"
+              @change="setElementExpressionSetting(selectedLabel, 'enabled', $event.target.checked)"
+          >
+          <span>Expression</span>
+        </label>
+
+        <div v-if="selectedLabel.expression.enabled" class="expression-settings">
+          <ExpressionHelp />
+          <label class="control-row">
+            <span>Formula</span>
+            <textarea
+                :value="selectedLabel.expression.value"
+                class="chart-data-input"
+                rows="3"
+                placeholder="CONCAT(TRIM(status), ' ', YEAR(createdAt))"
+                @input="setElementExpressionSetting(selectedLabel, 'value', $event.target.value)"
+            />
           </label>
         </div>
 

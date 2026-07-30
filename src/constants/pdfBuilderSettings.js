@@ -113,6 +113,11 @@ export const defaultAggregateSettings = {
   field: ''
 }
 
+export const defaultExpressionSettings = {
+  enabled: false,
+  value: ''
+}
+
 export const defaultTableCellSettings = {
   fill: '#ffffff',
   textColor: '#111827',

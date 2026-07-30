@@ -33,6 +33,7 @@ import {
   defaultCheckboxSettings,
   defaultAggregateSettings,
   defaultChartSettings,
+  defaultExpressionSettings,
   defaultElementBorderSettings,
   defaultImageSettings,
   defaultLineHitStrokeWidth,
@@ -54,6 +55,7 @@ import {
   sidebarElementTabs
 } from '../constants/pdfBuilderSettings'
 import { createRichTextStyleExtension, createTextAlignExtension } from '../editor/richTextExtensions'
+import { evaluateScalarExpression } from '../utils/expressionEngine'
 import {
   ArrowElement,
   ChartElement,
@@ -1426,6 +1428,10 @@ function canElementHaveAggregate(item) {
   return ['text', 'label'].includes(item?.type) || isAggregateTableCell(item)
 }
 
+function canElementHaveExpression(item) {
+  return ['text', 'label'].includes(item?.type) || isAggregateTableCell(item)
+}
+
 function getNormalizedAggregateFunction(value) {
   const normalized = String(value || '').trim().toUpperCase()
 
@@ -1458,6 +1464,19 @@ function ensureAggregateSettings(item) {
   item.aggregate = getNormalizedAggregateSettings(item.aggregate)
 }
 
+function getNormalizedExpressionSettings(settings = {}) {
+  return {
+    enabled: Boolean(settings?.enabled),
+    value: String(settings?.value || settings?.expression || settings?.formula || '').trim()
+  }
+}
+
+function ensureExpressionSettings(item) {
+  if (!canElementHaveExpression(item)) return
+
+  item.expression = getNormalizedExpressionSettings(item.expression)
+}
+
 function setAggregateSetting(target, key, value) {
   if (!canEditCanvas() || !canElementHaveAggregate(target)) return
 
@@ -1472,6 +1491,19 @@ function setAggregateSetting(target, key, value) {
 
 function setElementAggregateSetting(target, key, value) {
   setAggregateSetting(target, key, value)
+}
+
+function setExpressionSetting(target, key, value) {
+  if (!canEditCanvas() || !canElementHaveExpression(target)) return
+
+  ensureExpressionSettings(target)
+
+  if (key === 'enabled') target.expression.enabled = Boolean(value)
+  if (key === 'value') target.expression.value = String(value || '')
+}
+
+function setElementExpressionSetting(target, key, value) {
+  setExpressionSetting(target, key, value)
 }
 
 function setPageOrientation(page, orientation) {
@@ -3866,6 +3898,7 @@ function createTableCell(tableId, row, col, overrides = {}) {
     templateVariable: '',
     repeatVariable: '',
     aggregate: { ...defaultAggregateSettings },
+    expression: { ...defaultExpressionSettings },
     ...defaultTableCellSettings,
     ...overrides
   }
@@ -3900,6 +3933,7 @@ function ensureTableCellSettings(cell, tableId) {
     templateVariable: String(cell.templateVariable || '').trim(),
     repeatVariable: String(cell.repeatVariable || '').trim(),
     aggregate: getNormalizedAggregateSettings(cell.aggregate),
+    expression: getNormalizedExpressionSettings(cell.expression),
     repeatGeneratedFrom: String(cell.repeatGeneratedFrom || '').trim(),
     repeatSourceCellId: cell.repeatSourceCellId,
     repeatSourceRow: cell.repeatSourceRow,
@@ -4718,6 +4752,24 @@ function setSelectedTableCellsAggregateSetting(property, value) {
   })
 }
 
+function getSelectedTableCellExpressionValue(property, fallback) {
+  const source = selectedTableCells.value[0]
+
+  if (!source) return fallback
+
+  ensureExpressionSettings(source)
+
+  return source.expression?.[property] ?? fallback
+}
+
+function setSelectedTableCellsExpressionSetting(property, value) {
+  if (!canEditCanvas()) return
+
+  selectedTableCells.value.forEach(cell => {
+    setExpressionSetting(cell, property, value)
+  })
+}
+
 function getSelectedTableCellRows() {
   return Array.from(new Set(
     selectedTableCells.value
@@ -4800,7 +4852,8 @@ function cloneTableCellStyle(cell) {
     borderWidth: cell.borderWidth,
     borderStyle: cell.borderStyle,
     repeatVariable: cell.repeatVariable,
-    aggregate: getNormalizedAggregateSettings(cell.aggregate)
+    aggregate: getNormalizedAggregateSettings(cell.aggregate),
+    expression: getNormalizedExpressionSettings(cell.expression)
   }
 }
 
@@ -7953,6 +8006,7 @@ function ensureSelectableItemSettings(item) {
   ensureElementBandSettings(item)
   ensureTemplateVariableSettings(item)
   ensureAggregateSettings(item)
+  ensureExpressionSettings(item)
   ensureImageSettings(item)
   ensureTextSettings(item)
   ensureChartSettings(item)
@@ -10023,6 +10077,38 @@ function applyAggregateValuesToElements(elements, state, aggregateContext = {}) 
   return result
 }
 
+function applyExpressionValuesToElements(elements, contextValues = {}) {
+  const result = {
+    matched: 0,
+    changed: 0
+  }
+  const visit = item => {
+    if (!item || typeof item !== 'object') return
+
+    if (canElementHaveExpression(item)) {
+      ensureExpressionSettings(item)
+
+      if (item.expression.enabled && item.expression.value) {
+        setTemplateTextValue(item, evaluateScalarExpression(item.expression.value, contextValues))
+        result.matched += 1
+        result.changed += 1
+      }
+    }
+
+    if (Array.isArray(item.cells)) {
+      item.cells.forEach(cell => {
+        if (!cell?.repeatGeneratedFrom) visit(cell)
+      })
+    }
+
+    if (Array.isArray(item.children)) item.children.forEach(visit)
+  }
+
+  elements.forEach(visit)
+
+  return result
+}
+
 function singularizeDataSourceSegment(value) {
   const segment = String(value || '').trim()
 
@@ -10593,13 +10679,16 @@ function createPreparedBandInstance(state, band, contextValues = {}, options = {
       band
     })
     : { matched: 0, changed: 0 }
+  const expressionResult = elements.length
+    ? applyExpressionValuesToElements(elements, contextValues)
+    : { matched: 0, changed: 0 }
   const instance = {
     band,
     items,
     elements,
     baseHeight: getBandInstanceBaseHeight(band, contextValues),
-    matched: result.matched + aggregateResult.matched,
-    changed: result.changed + aggregateResult.changed,
+    matched: result.matched + aggregateResult.matched + expressionResult.matched,
+    changed: result.changed + aggregateResult.changed + expressionResult.changed,
     imageElements: result.imageElements
   }
 
@@ -10658,10 +10747,11 @@ function renderUnbandedTemplateElementsToCurrentPage(state) {
     band: null,
     context: state.rootContext
   })
+  const expressionResult = applyExpressionValuesToElements(items, state.rootContext.valueContext)
 
   state.currentPage.elements.push(...items)
-  state.matched += result.matched + aggregateResult.matched
-  state.changed += result.changed + aggregateResult.changed
+  state.matched += result.matched + aggregateResult.matched + expressionResult.matched
+  state.changed += result.changed + aggregateResult.changed + expressionResult.changed
   state.renderedElementCount += items.length
   state.imageElements.push(...result.imageElements)
 }
@@ -11190,6 +11280,7 @@ async function applyTemplateValuesData(data) {
   const aggregateResult = applyAggregateValuesToElements(templateElements, aggregateState, {
     context: aggregateState.rootContext
   })
+  const expressionResult = applyExpressionValuesToElements(templateElements, values)
   const stats = { failedImages: 0 }
 
   if (result.imageElements.length) {
@@ -11203,8 +11294,8 @@ async function applyTemplateValuesData(data) {
 
   return {
     valueCount: Object.keys(values).length,
-    matched: result.matched + aggregateResult.matched,
-    changed: result.changed + aggregateResult.changed,
+    matched: result.matched + aggregateResult.matched + expressionResult.matched,
+    changed: result.changed + aggregateResult.changed + expressionResult.changed,
     failedImages: stats.failedImages
   }
 }
@@ -11804,6 +11895,7 @@ onBeforeUnmount(() => {
     defaultTextSettings,
     defaultTableCellSettings,
     defaultAggregateSettings,
+    defaultExpressionSettings,
     aggregateFunctionOptions,
     aggregateScopeOptions,
     MIN_TABLE_ROWS,
@@ -12001,6 +12093,8 @@ onBeforeUnmount(() => {
     setSelectedTableRowRepeatVariable,
     getSelectedTableCellAggregateValue,
     setSelectedTableCellsAggregateSetting,
+    getSelectedTableCellExpressionValue,
+    setSelectedTableCellsExpressionSetting,
     setSelectedTableCellsStyle,
     cloneTableCellStyle,
     fillMissingTableCells,
@@ -12074,6 +12168,7 @@ onBeforeUnmount(() => {
     setTextLetterSpacing,
     setLabelFontSize,
     setElementAggregateSetting,
+    setElementExpressionSetting,
     canShapeHaveFill,
     canShapeHaveCornerRadius,
     getShapeStrokeWidthMin,

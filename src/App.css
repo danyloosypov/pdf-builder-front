@@ -315,7 +315,8 @@
   border-radius: 6px;
 }
 
-.aggregate-settings {
+.aggregate-settings,
+.expression-settings {
   display: grid;
   gap: 8px;
   padding: 8px;
