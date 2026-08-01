@@ -54,8 +54,21 @@ import {
   sidebarElementDragTypes,
   sidebarElementTabs
 } from '../constants/pdfBuilderSettings'
+import {
+  applyAggregateValuesToElements as applyAggregateValuesWithEngine,
+  canElementHaveAggregate,
+  ensureAggregateSettings,
+  getNormalizedAggregateSettings,
+  setAggregateSettingValue
+} from '../domain/aggregateEngine'
+import {
+  applyExpressionValuesToElements,
+  canElementHaveExpression,
+  ensureExpressionSettings,
+  getNormalizedExpressionSettings,
+  setExpressionSettingValue
+} from '../domain/expressionBindings'
 import { createRichTextStyleExtension, createTextAlignExtension } from '../editor/richTextExtensions'
-import { evaluateScalarExpression } from '../utils/expressionEngine'
 import {
   ArrowElement,
   ChartElement,
@@ -123,9 +136,13 @@ import {
   applyTemplateVariablesToElements,
   canElementHaveTemplateVariable,
   getTemplateVariablesFromElements,
-  normalizeTemplateValuesPayload,
-  setTemplateTextValue
+  normalizeTemplateValuesPayload
 } from '../utils/templateVariables'
+import {
+  getDataEntriesFromValue,
+  getDataValueByPath,
+  isPlainObjectValue
+} from '../utils/dataAccess'
 import { getNormalizedQRLink } from '../utils/qr'
 
 export function usePdfBuilder() {
@@ -1413,80 +1430,10 @@ function getCanvasItemDraggable(item) {
   return canEditCanvas() && item?.draggable !== false
 }
 
-function isAggregateTableCell(item) {
-  return Boolean(
-    item &&
-    typeof item === 'object' &&
-    !item.type &&
-    Object.prototype.hasOwnProperty.call(item, 'row') &&
-    Object.prototype.hasOwnProperty.call(item, 'col') &&
-    Object.prototype.hasOwnProperty.call(item, 'text')
-  )
-}
-
-function canElementHaveAggregate(item) {
-  return ['text', 'label'].includes(item?.type) || isAggregateTableCell(item)
-}
-
-function canElementHaveExpression(item) {
-  return ['text', 'label'].includes(item?.type) || isAggregateTableCell(item)
-}
-
-function getNormalizedAggregateFunction(value) {
-  const normalized = String(value || '').trim().toUpperCase()
-
-  return aggregateFunctionOptions.some(option => option.value === normalized)
-    ? normalized
-    : defaultAggregateSettings.function
-}
-
-function getNormalizedAggregateScope(value) {
-  const normalized = String(value || '').trim()
-
-  return aggregateScopeOptions.some(option => option.value === normalized)
-    ? normalized
-    : defaultAggregateSettings.scope
-}
-
-function getNormalizedAggregateSettings(settings = {}) {
-  return {
-    enabled: Boolean(settings?.enabled),
-    function: getNormalizedAggregateFunction(settings?.function || settings?.operation),
-    scope: getNormalizedAggregateScope(settings?.scope),
-    dataSource: String(settings?.dataSource || settings?.source || '').trim(),
-    field: String(settings?.field || settings?.valuePath || settings?.path || '').trim()
-  }
-}
-
-function ensureAggregateSettings(item) {
-  if (!canElementHaveAggregate(item)) return
-
-  item.aggregate = getNormalizedAggregateSettings(item.aggregate)
-}
-
-function getNormalizedExpressionSettings(settings = {}) {
-  return {
-    enabled: Boolean(settings?.enabled),
-    value: String(settings?.value || settings?.expression || settings?.formula || '').trim()
-  }
-}
-
-function ensureExpressionSettings(item) {
-  if (!canElementHaveExpression(item)) return
-
-  item.expression = getNormalizedExpressionSettings(item.expression)
-}
-
 function setAggregateSetting(target, key, value) {
   if (!canEditCanvas() || !canElementHaveAggregate(target)) return
 
-  ensureAggregateSettings(target)
-
-  if (key === 'enabled') target.aggregate.enabled = Boolean(value)
-  if (key === 'function') target.aggregate.function = getNormalizedAggregateFunction(value)
-  if (key === 'scope') target.aggregate.scope = getNormalizedAggregateScope(value)
-  if (key === 'dataSource') target.aggregate.dataSource = String(value || '').trim()
-  if (key === 'field') target.aggregate.field = String(value || '').trim()
+  setAggregateSettingValue(target, key, value)
 }
 
 function setElementAggregateSetting(target, key, value) {
@@ -1496,10 +1443,7 @@ function setElementAggregateSetting(target, key, value) {
 function setExpressionSetting(target, key, value) {
   if (!canEditCanvas() || !canElementHaveExpression(target)) return
 
-  ensureExpressionSettings(target)
-
-  if (key === 'enabled') target.expression.enabled = Boolean(value)
-  if (key === 'value') target.expression.value = String(value || '')
+  setExpressionSettingValue(target, key, value)
 }
 
 function setElementExpressionSetting(target, key, value) {
@@ -9850,263 +9794,12 @@ async function loadTemplateValueImages(imageElements, stats) {
   }))
 }
 
-function isPlainObjectValue(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
-
-function getDataValueByPath(source, path) {
-  if (!source || typeof source !== 'object') return undefined
-  if (Object.prototype.hasOwnProperty.call(source, path)) return source[path]
-
-  return String(path || '')
-    .split('.')
-    .filter(Boolean)
-    .reduce((value, segment) => {
-      if (!value || typeof value !== 'object') return undefined
-
-      return value[segment]
-    }, source)
-}
-
-function getDataEntriesFromValue(value) {
-  if (Array.isArray(value)) return value
-  if (value === null || value === undefined) return []
-
-  return []
-}
-
-function resolveAggregatePathValue(path, ...sources) {
-  const sourcePath = String(path || '').trim()
-
-  if (!sourcePath) return undefined
-
-  for (const source of sources) {
-    const value = getDataValueByPath(source, sourcePath)
-
-    if (value !== undefined) return value
-  }
-
-  return undefined
-}
-
-function getDocumentAggregateRecords(state, settings) {
-  const source = String(settings?.dataSource || '').trim()
-
-  if (source) {
-    return getDataEntriesFromValue(resolveAggregatePathValue(source, state.rootContext.valueContext, state.rootContext.rootValues))
-  }
-
-  const rootValue = state.rootContext.rootValues
-
-  if (Array.isArray(rootValue)) return rootValue
-
-  const rootDataBands = getRootDataBands()
-
-  if (rootDataBands.length === 1) {
-    return getDataBandEntries(rootDataBands[0], state.rootContext)
-  }
-
-  return []
-}
-
-function resolveAggregateSourceRecords(state, settings, aggregateContext = {}) {
-  const scope = getNormalizedAggregateScope(settings?.scope)
-  const source = String(settings?.dataSource || '').trim()
-  const dataContext = aggregateContext.context || state.rootContext
-  const parentContext = aggregateContext.parentContext || null
-
-  if (scope === 'group' && !source && Array.isArray(aggregateContext.groupRecords)) {
-    return aggregateContext.groupRecords
-  }
-
-  if (scope === 'band' && !source && Array.isArray(aggregateContext.dataRecords)) {
-    return aggregateContext.dataRecords
-  }
-
-  if (scope === 'parent' && !source) {
-    if (Array.isArray(parentContext?.record)) return parentContext.record
-    return parentContext?.record === undefined ? [] : [parentContext.record]
-  }
-
-  if (scope === 'document') {
-    return getDocumentAggregateRecords(state, settings)
-  }
-
-  if (source) {
-    const value = scope === 'parent'
-      ? resolveAggregatePathValue(
-        source,
-        parentContext?.valueContext,
-        parentContext?.record,
-        dataContext?.valueContext,
-        state.rootContext.rootValues
-      )
-      : resolveAggregatePathValue(
-        source,
-        dataContext?.valueContext,
-        dataContext?.record,
-        parentContext?.valueContext,
-        state.rootContext.rootValues
-      )
-
-    return getDataEntriesFromValue(value)
-  }
-
-  const bandType = getNormalizedBandType(aggregateContext.band?.type)
-
-  if (scope === 'auto') {
-    if (['group-header', 'group-footer'].includes(bandType) && Array.isArray(aggregateContext.groupRecords)) {
-      return aggregateContext.groupRecords
-    }
-
-    if (['data', 'data-header', 'data-footer', 'continuation'].includes(bandType) && Array.isArray(aggregateContext.dataRecords)) {
-      return aggregateContext.dataRecords
-    }
-  }
-
-  return getDocumentAggregateRecords(state, settings)
-}
-
-function getAggregateFieldValue(record, field) {
-  const fieldPath = String(field || '').trim()
-
-  if (fieldPath) return getDataValueByPath(record, fieldPath)
-  if (record && typeof record === 'object') return record.value
-
-  return record
-}
-
-function getAggregateNumber(value) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-
-  if (typeof value === 'string') {
-    const normalized = value
-      .trim()
-      .replace(/\s+/g, '')
-      .replace(/,(?=\d{1,2}$)/, '.')
-      .replace(/[^0-9.+-]/g, '')
-    const numeric = Number(normalized)
-
-    return Number.isFinite(numeric) ? numeric : null
-  }
-
-  return null
-}
-
-function formatAggregateValue(value) {
-  if (value === null || value === undefined) return ''
-  if (typeof value !== 'number') return String(value)
-  if (!Number.isFinite(value)) return ''
-  if (Number.isInteger(value)) return String(value)
-
-  return String(Number(value.toFixed(4)))
-}
-
-function getAggregateComparableValues(records, field) {
-  return records
-    .map(record => getAggregateFieldValue(record, field))
-    .filter(value => value !== null && value !== undefined && value !== '')
-}
-
-function calculateAggregateValue(records, settings) {
-  const fn = getNormalizedAggregateFunction(settings?.function)
-  const field = String(settings?.field || '').trim()
-  const values = getAggregateComparableValues(records, field)
-
-  if (fn === 'COUNT') {
-    return field ? values.length : records.length
-  }
-
-  const numericValues = values
-    .map(getAggregateNumber)
-    .filter(value => value !== null)
-
-  if (['SUM', 'AVG'].includes(fn)) {
-    const sum = numericValues.reduce((total, value) => total + value, 0)
-
-    return fn === 'AVG'
-      ? (numericValues.length ? sum / numericValues.length : 0)
-      : sum
-  }
-
-  if (!values.length) return ''
-
-  if (numericValues.length === values.length) {
-    return fn === 'MIN'
-      ? Math.min(...numericValues)
-      : Math.max(...numericValues)
-  }
-
-  const sortedValues = values.map(value => String(value)).sort((a, b) => a.localeCompare(b))
-
-  return fn === 'MIN' ? sortedValues[0] : sortedValues[sortedValues.length - 1]
-}
-
 function applyAggregateValuesToElements(elements, state, aggregateContext = {}) {
-  const result = {
-    matched: 0,
-    changed: 0
-  }
-  const visit = item => {
-    if (!item || typeof item !== 'object') return
-
-    if (canElementHaveAggregate(item)) {
-      ensureAggregateSettings(item)
-
-      if (item.aggregate.enabled) {
-        const records = resolveAggregateSourceRecords(state, item.aggregate, aggregateContext)
-        const value = calculateAggregateValue(records, item.aggregate)
-
-        setTemplateTextValue(item, formatAggregateValue(value))
-        result.matched += 1
-        result.changed += 1
-      }
-    }
-
-    if (Array.isArray(item.cells)) {
-      item.cells.forEach(cell => {
-        if (!cell?.repeatGeneratedFrom) visit(cell)
-      })
-    }
-
-    if (Array.isArray(item.children)) item.children.forEach(visit)
-  }
-
-  elements.forEach(visit)
-
-  return result
-}
-
-function applyExpressionValuesToElements(elements, contextValues = {}) {
-  const result = {
-    matched: 0,
-    changed: 0
-  }
-  const visit = item => {
-    if (!item || typeof item !== 'object') return
-
-    if (canElementHaveExpression(item)) {
-      ensureExpressionSettings(item)
-
-      if (item.expression.enabled && item.expression.value) {
-        setTemplateTextValue(item, evaluateScalarExpression(item.expression.value, contextValues))
-        result.matched += 1
-        result.changed += 1
-      }
-    }
-
-    if (Array.isArray(item.cells)) {
-      item.cells.forEach(cell => {
-        if (!cell?.repeatGeneratedFrom) visit(cell)
-      })
-    }
-
-    if (Array.isArray(item.children)) item.children.forEach(visit)
-  }
-
-  elements.forEach(visit)
-
-  return result
+  return applyAggregateValuesWithEngine(elements, state, aggregateContext, {
+    getDataBandEntries,
+    getNormalizedBandType,
+    getRootDataBands
+  })
 }
 
 function singularizeDataSourceSegment(value) {

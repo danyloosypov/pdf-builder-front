@@ -1,3 +1,5 @@
+import { getDataValueByPath } from './dataAccess.js'
+
 export const SCALAR_FUNCTION_NAMES = [
   'UPPER',
   'LOWER',
@@ -15,20 +17,6 @@ export const SCALAR_FUNCTION_NAMES = [
   'DAY',
   'DATE_DIFF'
 ]
-
-function getDataValueByPath(source, path) {
-  if (!source || typeof source !== 'object') return undefined
-  if (Object.prototype.hasOwnProperty.call(source, path)) return source[path]
-
-  return String(path || '')
-    .split('.')
-    .filter(Boolean)
-    .reduce((value, segment) => {
-      if (!value || typeof value !== 'object') return undefined
-
-      return value[segment]
-    }, source)
-}
 
 function normalizeExpressionSource(value) {
   let source = String(value || '').trim()

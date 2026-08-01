@@ -1,22 +1,17 @@
-export const TEMPLATE_VARIABLE_ELEMENT_TYPES = new Set(['text', 'label', 'image', 'checkbox'])
+import { getDataValueByPath } from './dataAccess.js'
+import {
+  TEMPLATE_VARIABLE_ELEMENT_TYPES,
+  canElementHaveTemplateVariable,
+  isTableCellTextTarget
+} from '../domain/templateTargets.js'
 
-function isTemplateTableCell(item) {
-  return Boolean(
-    item &&
-    typeof item === 'object' &&
-    !item.type &&
-    Object.prototype.hasOwnProperty.call(item, 'row') &&
-    Object.prototype.hasOwnProperty.call(item, 'col') &&
-    Object.prototype.hasOwnProperty.call(item, 'text')
-  )
+export {
+  TEMPLATE_VARIABLE_ELEMENT_TYPES,
+  canElementHaveTemplateVariable
 }
 
 export function normalizeTemplateVariableKey(value) {
   return String(value || '').trim()
-}
-
-export function canElementHaveTemplateVariable(item) {
-  return TEMPLATE_VARIABLE_ELEMENT_TYPES.has(item?.type) || isTemplateTableCell(item)
 }
 
 export function getTemplateVariableKey(item) {
@@ -31,7 +26,7 @@ export function getTemplateVariableValueType(item) {
 }
 
 export function getTemplateVariableCurrentValue(item) {
-  if (item?.type === 'text' || item?.type === 'label' || isTemplateTableCell(item)) return String(item.text || '')
+  if (item?.type === 'text' || item?.type === 'label' || isTableCellTextTarget(item)) return String(item.text || '')
   if (item?.type === 'checkbox') return Boolean(item.checked)
 
   if (item?.type === 'image') {
@@ -63,7 +58,7 @@ function getTableRepeatRows(table) {
   const rowMap = new Map()
 
   table.cells.forEach(cell => {
-    if (!isTemplateTableCell(cell) || cell.repeatGeneratedFrom) return
+    if (!isTableCellTextTarget(cell) || cell.repeatGeneratedFrom) return
 
     const repeatVariable = getRepeatVariableKey(cell)
 
@@ -276,22 +271,8 @@ export function setTemplateTextValue(item, value) {
   }
 }
 
-function getObjectValueByPath(source, path) {
-  if (!source || typeof source !== 'object') return undefined
-  if (Object.prototype.hasOwnProperty.call(source, path)) return source[path]
-
-  return String(path || '')
-    .split('.')
-    .filter(Boolean)
-    .reduce((value, segment) => {
-      if (!value || typeof value !== 'object') return undefined
-
-      return value[segment]
-    }, source)
-}
-
 function getRepeatRowEntries(values, key) {
-  const value = getObjectValueByPath(values, key)
+  const value = getDataValueByPath(values, key)
 
   return Array.isArray(value) ? value : null
 }
@@ -339,7 +320,7 @@ function fillRepeatRowCells(cells, entry) {
 
     if (!key) return
 
-    setTemplateTextValue(cell, getObjectValueByPath(entry, key))
+    setTemplateTextValue(cell, getDataValueByPath(entry, key))
     changed += 1
   })
 
@@ -567,9 +548,9 @@ export function applyTemplateVariablesToElements(elements, values = {}) {
 
     if (!key || !Object.prototype.hasOwnProperty.call(normalizedValues, key)) return
     if (
-      isTemplateTableCell(item) &&
+      isTableCellTextTarget(item) &&
       getRepeatVariableKey(item) &&
-      Array.isArray(getObjectValueByPath(normalizedValues, getRepeatVariableKey(item)))
+      Array.isArray(getDataValueByPath(normalizedValues, getRepeatVariableKey(item)))
     ) {
       return
     }
