@@ -153,6 +153,17 @@ const DEFAULT_BAND_TYPE = 'page-header'
 const MIN_BAND_COLUMN_COUNT = 1
 const MAX_BAND_COLUMN_COUNT = 12
 const MIN_BAND_COLUMN_WIDTH = 12
+const HISTORY_LIMIT = 80
+const HISTORY_CAPTURE_DELAY_MS = 160
+const runtimeLayoutKeys = new Set([
+  'image',
+  'richImage',
+  'shapeRichImage',
+  'imageDataUrl',
+  'imageSource',
+  'bandGeneratedInstance',
+  'generatedFromDataBands'
+])
 const DEFAULT_BAND_COLUMN_SETTINGS = {
   count: 1,
   gap: 16
@@ -1292,6 +1303,8 @@ const dragOverLayerId = ref(null)
 const renamingLayerId = ref(null)
 const layerRenameValue = ref('')
 const layerRenameInputRef = ref(null)
+const undoHistory = ref([])
+const redoHistory = ref([])
 const isImageDragActive = ref(false)
 const qrLink = ref('')
 const qrError = ref('')
@@ -1317,6 +1330,10 @@ const contextMenu = ref({
 const lastCanvasPastePoint = ref(null)
 const richRenderVersions = new Map()
 let canvasVersion = 0
+let lastHistorySnapshot = null
+let lastHistorySignature = ''
+let historyCaptureTimer = null
+let isRestoringHistory = false
 let generatedCanvasIdCounter = 0
 let clipboardPasteCount = 0
 const pageWatermarkImageLoadedSources = new WeakMap()
@@ -1327,6 +1344,8 @@ const editorPosition = ref({
   width: 240,
   rotation: 0
 })
+const canUndo = computed(() => undoHistory.value.length > 0 && isDesignMode.value)
+const canRedo = computed(() => redoHistory.value.length > 0 && isDesignMode.value)
 const DEFAULT_LINK_TEXT_COLOR = '#2563eb'
 const linkUrlInput = ref('')
 const TABLE_RESIZE_MIN_TRACK_SIZE = 16
@@ -7977,6 +7996,20 @@ function handleGlobalClipboardKeyDown(event) {
   if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) return
 
   const key = String(event.key || '').toLowerCase()
+  const isCommandKey = event.ctrlKey || event.metaKey
+
+  if (isCommandKey && !event.altKey) {
+    const handledHistory =
+      (key === 'z' && !event.shiftKey && undoChange()) ||
+      (key === 'y' && !event.shiftKey && redoChange()) ||
+      (key === 'z' && event.shiftKey && redoChange())
+
+    if (handledHistory) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+  }
 
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
     const handled = ['delete', 'backspace'].includes(key) && deleteSelectedElements()
@@ -8526,6 +8559,8 @@ watch(
   { flush: 'post' }
 )
 watch(pagePixelSize, () => nextTick(removeOutsideCanvasElements))
+watch(getHistoryWatchSource, scheduleHistorySnapshot, { deep: true, flush: 'post' })
+setHistoryBaseline()
 
 function isTargetInsideNode(target, node) {
   if (!target || !node) return false
@@ -9100,15 +9135,6 @@ function updateTransform(e, id) {
   }
 }
 
-const runtimeLayoutKeys = new Set([
-  'image',
-  'richImage',
-  'shapeRichImage',
-  'imageDataUrl',
-  'imageSource',
-  'bandGeneratedInstance',
-  'generatedFromDataBands'
-])
 const DEFAULT_EXPORTED_IMAGE_URL = ''
 const PDF_POINTS_PER_INCH = 72
 const PDF_EXPORT_MAX_PIXEL_RATIO = 2
@@ -10248,6 +10274,212 @@ function cloneCanvasPagesForDataBandTemplate(sourcePages = pages.value) {
 
 function getCanvasModePageClone(sourcePages = pages.value) {
   return cloneCanvasPagesForDataBandTemplate(sourcePages)
+}
+
+function cloneHistorySnapshot(snapshot = {}) {
+  return {
+    pages: getCanvasModePageClone(snapshot.pages || []),
+    activePageId: snapshot.activePageId || '',
+    bands: cloneCanvasItemValue(snapshot.bands || []),
+    activeBandId: snapshot.activeBandId || '',
+    selectedPagePreset: snapshot.selectedPagePreset || 'a4',
+    pageUnit: snapshot.pageUnit || 'cm',
+    canvasColor: snapshot.canvasColor || '#ffffff',
+    selectedPageMarginPreset: snapshot.selectedPageMarginPreset || 'normal',
+    pageNumberSettings: getNormalizedPageNumberSettings(snapshot.pageNumberSettings),
+    customPageSizeInches: {
+      width: Number(snapshot.customPageSizeInches?.width) || customPageSizeInches.value.width,
+      height: Number(snapshot.customPageSizeInches?.height) || customPageSizeInches.value.height
+    },
+    customPageMarginsInches: getClampedPageMargins({
+      ...customPageMarginsInches.value,
+      ...(snapshot.customPageMarginsInches || {})
+    }),
+    pageGridSettings: clonePageGridSettings(snapshot.pageGridSettings),
+    applyPageColumnsToAllPages: Boolean(snapshot.applyPageColumnsToAllPages),
+    applyPageWatermarkToAllPages: Boolean(snapshot.applyPageWatermarkToAllPages)
+  }
+}
+
+function createHistorySnapshot() {
+  const sourcePages = isPreviewMode.value && designModePages?.length
+    ? designModePages
+    : pages.value
+
+  return cloneHistorySnapshot({
+    pages: sourcePages,
+    activePageId: getActivePageIdFromPageList(sourcePages, activePageId.value),
+    bands: bands.value,
+    activeBandId: activeBandId.value,
+    selectedPagePreset: selectedPagePreset.value,
+    pageUnit: pageUnit.value,
+    canvasColor: canvasColor.value,
+    selectedPageMarginPreset: selectedPageMarginPreset.value,
+    pageNumberSettings: pageNumberSettings.value,
+    customPageSizeInches: customPageSizeInches.value,
+    customPageMarginsInches: customPageMarginsInches.value,
+    pageGridSettings: pageGridSettings.value,
+    applyPageColumnsToAllPages: applyPageColumnsToAllPages.value,
+    applyPageWatermarkToAllPages: applyPageWatermarkToAllPages.value
+  })
+}
+
+function getHistorySnapshotSignature(snapshot = createHistorySnapshot()) {
+  return JSON.stringify(getSerializableLayoutValue(snapshot))
+}
+
+function setHistoryBaseline(snapshot = createHistorySnapshot()) {
+  lastHistorySnapshot = cloneHistorySnapshot(snapshot)
+  lastHistorySignature = getHistorySnapshotSignature(lastHistorySnapshot)
+}
+
+function pushHistorySnapshot(stack, snapshot) {
+  stack.value.push(cloneHistorySnapshot(snapshot))
+
+  if (stack.value.length > HISTORY_LIMIT) {
+    stack.value.splice(0, stack.value.length - HISTORY_LIMIT)
+  }
+}
+
+function recordHistorySnapshot() {
+  historyCaptureTimer = null
+
+  if (isRestoringHistory || !isDesignMode.value) return
+
+  const currentSnapshot = createHistorySnapshot()
+  const currentSignature = getHistorySnapshotSignature(currentSnapshot)
+
+  if (!lastHistorySnapshot) {
+    setHistoryBaseline(currentSnapshot)
+    return
+  }
+
+  if (currentSignature === lastHistorySignature) return
+
+  pushHistorySnapshot(undoHistory, lastHistorySnapshot)
+  redoHistory.value = []
+  setHistoryBaseline(currentSnapshot)
+}
+
+function scheduleHistorySnapshot() {
+  if (isRestoringHistory || !isDesignMode.value) return
+
+  if (historyCaptureTimer) window.clearTimeout(historyCaptureTimer)
+
+  historyCaptureTimer = window.setTimeout(recordHistorySnapshot, HISTORY_CAPTURE_DELAY_MS)
+}
+
+function flushPendingHistorySnapshot() {
+  if (!historyCaptureTimer) return
+
+  window.clearTimeout(historyCaptureTimer)
+  recordHistorySnapshot()
+}
+
+function getHistoryWatchSource() {
+  if (!isDesignMode.value) return null
+
+  return {
+    pages: pages.value,
+    activePageId: activePageId.value,
+    bands: bands.value,
+    activeBandId: activeBandId.value,
+    selectedPagePreset: selectedPagePreset.value,
+    pageUnit: pageUnit.value,
+    canvasColor: canvasColor.value,
+    selectedPageMarginPreset: selectedPageMarginPreset.value,
+    pageNumberSettings: pageNumberSettings.value,
+    customPageSizeInches: customPageSizeInches.value,
+    customPageMarginsInches: customPageMarginsInches.value,
+    pageGridSettings: pageGridSettings.value,
+    applyPageColumnsToAllPages: applyPageColumnsToAllPages.value,
+    applyPageWatermarkToAllPages: applyPageWatermarkToAllPages.value
+  }
+}
+
+function getRestoredPagePreset(value) {
+  return pageSizePresets.some(preset => preset.value === value) ? value : 'a4'
+}
+
+function getRestoredMarginPreset(value) {
+  return pageMarginPresets.some(preset => preset.value === value) ? value : 'normal'
+}
+
+function restoreHistorySnapshot(snapshot) {
+  const nextSnapshot = cloneHistorySnapshot(snapshot)
+  const restoredPages = getCanvasModePageClone(nextSnapshot.pages)
+
+  if (!restoredPages.length) return
+
+  isRestoringHistory = true
+  if (historyCaptureTimer) {
+    window.clearTimeout(historyCaptureTimer)
+    historyCaptureTimer = null
+  }
+
+  canvasMode.value = CANVAS_MODE_DESIGN
+  clearPreviewModeSnapshot()
+  designModePages = null
+  designModeActivePageId = ''
+  dataBandRenderTemplatePages = null
+  resetCanvasInteractionState()
+
+  selectedPagePreset.value = getRestoredPagePreset(nextSnapshot.selectedPagePreset)
+  pageUnit.value = ['cm', 'in'].includes(nextSnapshot.pageUnit) ? nextSnapshot.pageUnit : 'cm'
+  canvasColor.value = /^#[\da-f]{6}$/i.test(nextSnapshot.canvasColor || '')
+    ? nextSnapshot.canvasColor
+    : '#ffffff'
+  selectedPageMarginPreset.value = getRestoredMarginPreset(nextSnapshot.selectedPageMarginPreset)
+  pageNumberSettings.value = getNormalizedPageNumberSettings(nextSnapshot.pageNumberSettings)
+  customPageSizeInches.value = {
+    width: clampNumber(nextSnapshot.customPageSizeInches.width, MIN_PAGE_INCHES, MAX_PAGE_INCHES),
+    height: clampNumber(nextSnapshot.customPageSizeInches.height, MIN_PAGE_INCHES, MAX_PAGE_INCHES)
+  }
+  customPageMarginsInches.value = getClampedPageMargins(nextSnapshot.customPageMarginsInches)
+  pageGridSettings.value = clonePageGridSettings(nextSnapshot.pageGridSettings)
+  applyPageColumnsToAllPages.value = nextSnapshot.applyPageColumnsToAllPages
+  applyPageWatermarkToAllPages.value = nextSnapshot.applyPageWatermarkToAllPages
+  bands.value = getCanonicalBandOrder(nextSnapshot.bands)
+  activeBandId.value = bands.value.some(band => String(band.id) === String(nextSnapshot.activeBandId))
+    ? nextSnapshot.activeBandId
+    : bands.value[0]?.id || ''
+  pages.value = restoredPages
+  activePageId.value = getActivePageIdFromPageList(restoredPages, nextSnapshot.activePageId)
+  canvasVersion += 1
+  setHistoryBaseline(nextSnapshot)
+  renderRestoredCanvasModePages(restoredPages)
+
+  nextTick(() => {
+    isRestoringHistory = false
+  })
+}
+
+function undoChange() {
+  if (!isDesignMode.value) return false
+
+  flushPendingHistorySnapshot()
+
+  const targetSnapshot = undoHistory.value.pop()
+  if (!targetSnapshot) return false
+
+  pushHistorySnapshot(redoHistory, createHistorySnapshot())
+  restoreHistorySnapshot(targetSnapshot)
+
+  return true
+}
+
+function redoChange() {
+  if (!isDesignMode.value) return false
+
+  flushPendingHistorySnapshot()
+
+  const targetSnapshot = redoHistory.value.pop()
+  if (!targetSnapshot) return false
+
+  pushHistorySnapshot(undoHistory, createHistorySnapshot())
+  restoreHistorySnapshot(targetSnapshot)
+
+  return true
 }
 
 function getActivePageIdFromPageList(pageList = [], preferredPageId = '') {
@@ -11515,6 +11747,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalClipboardKeyDown)
   window.removeEventListener('paste', handleGlobalPaste)
   window.removeEventListener('mousedown', handleGlobalMouseDown)
+  if (historyCaptureTimer) window.clearTimeout(historyCaptureTimer)
 })
 
   return {
@@ -11526,6 +11759,10 @@ onBeforeUnmount(() => {
     isDesignMode,
     isPreviewMode,
     hasPreviewPages,
+    canUndo,
+    canRedo,
+    undoChange,
+    redoChange,
     bands,
     activeBandId,
     activeBand,

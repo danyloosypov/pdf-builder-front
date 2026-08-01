@@ -36,6 +36,28 @@ export default {
         </div>
       </div>
 
+      <div class="history-panel">
+        <div class="panel-title">History</div>
+        <div class="history-button-grid">
+          <button
+              type="button"
+              :disabled="!canUndo"
+              title="Ctrl+Z"
+              @click="undoChange"
+          >
+            Undo
+          </button>
+          <button
+              type="button"
+              :disabled="!canRedo"
+              title="Ctrl+Y"
+              @click="redoChange"
+          >
+            Redo
+          </button>
+        </div>
+      </div>
+
       <div class="page-size-panel">
         <div class="panel-title">Canvas Size</div>
 
