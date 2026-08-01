@@ -1289,6 +1289,9 @@ const bandResizeDrag = ref(null)
 const draggedSidebarElementType = ref(null)
 const draggedLayerId = ref(null)
 const dragOverLayerId = ref(null)
+const renamingLayerId = ref(null)
+const layerRenameValue = ref('')
+const layerRenameInputRef = ref(null)
 const isImageDragActive = ref(false)
 const qrLink = ref('')
 const qrError = ref('')
@@ -7258,13 +7261,17 @@ function truncateLayerText(value, maxLength = 28) {
   return `${text.slice(0, maxLength - 3)}...`
 }
 
+function getLayerCustomName(item) {
+  return String(item?.layerName || '').trim()
+}
+
 function getLayerTitleSuffix(value) {
   const preview = truncateLayerText(value)
 
   return preview ? `: ${preview}` : ''
 }
 
-function getLayerItemTitle(item) {
+function getGeneratedLayerItemTitle(item) {
   if (!item) return 'Element'
 
   if (item.type === 'text') return `Text${getLayerTitleSuffix(item.text)}`
@@ -7287,6 +7294,10 @@ function getLayerItemTitle(item) {
   if (item.type === 'group') return `${item.title || 'Group'} (${item.children?.length || 0})`
 
   return String(item.type || 'Element')
+}
+
+function getLayerItemTitle(item) {
+  return getLayerCustomName(item) || getGeneratedLayerItemTitle(item)
 }
 
 function getCanvasItemById(id) {
@@ -7368,6 +7379,64 @@ function moveSelectedLayerToBack() {
 
 function moveSelectedLayerToFront() {
   reorderSelectedLayer(canvasItems.value.length - 1)
+}
+
+function isLayerRenaming(itemId) {
+  return String(renamingLayerId.value) === String(itemId)
+}
+
+function startLayerRename(item, event = null) {
+  if (!canEditCanvas()) return
+  if (!item) return
+
+  event?.preventDefault?.()
+  event?.stopPropagation?.()
+
+  if (editingId.value && editingId.value !== item.id) {
+    finishTextEditing()
+  }
+
+  selectElement(item.id)
+  renamingLayerId.value = item.id
+  layerRenameValue.value = getLayerItemTitle(item)
+
+  nextTick(() => {
+    const input = Array.isArray(layerRenameInputRef.value)
+      ? layerRenameInputRef.value.find(Boolean)
+      : layerRenameInputRef.value
+
+    input?.focus?.()
+    input?.select?.()
+  })
+}
+
+function setLayerRenameValue(value) {
+  layerRenameValue.value = String(value || '')
+}
+
+function commitLayerRename() {
+  if (renamingLayerId.value === null) return
+
+  const item = getCanvasItemById(renamingLayerId.value)
+
+  if (item) {
+    const nextName = layerRenameValue.value.replace(/\s+/g, ' ').trim()
+    const generatedTitle = getGeneratedLayerItemTitle(item)
+
+    if (nextName && nextName !== generatedTitle) {
+      item.layerName = nextName
+    } else {
+      delete item.layerName
+    }
+  }
+
+  renamingLayerId.value = null
+  layerRenameValue.value = ''
+}
+
+function cancelLayerRename() {
+  renamingLayerId.value = null
+  layerRenameValue.value = ''
 }
 
 function alignSelectedElements(axis, alignment) {
@@ -11565,6 +11634,9 @@ onBeforeUnmount(() => {
     draggedSidebarElementType,
     draggedLayerId,
     dragOverLayerId,
+    renamingLayerId,
+    layerRenameValue,
+    layerRenameInputRef,
     isImageDragActive,
     qrLink,
     qrError,
@@ -11993,6 +12065,8 @@ onBeforeUnmount(() => {
     isTextAlignActive,
     truncateLayerText,
     getLayerTitleSuffix,
+    getLayerCustomName,
+    getGeneratedLayerItemTitle,
     getLayerItemTitle,
     getCanvasItemById,
     syncCanvasLayerOrder,
@@ -12002,6 +12076,11 @@ onBeforeUnmount(() => {
     moveSelectedLayerForward,
     moveSelectedLayerToBack,
     moveSelectedLayerToFront,
+    isLayerRenaming,
+    startLayerRename,
+    setLayerRenameValue,
+    commitLayerRename,
+    cancelLayerRename,
     alignSelectedElements,
     collectCanvasItemIds,
     createUniqueCanvasItemId,

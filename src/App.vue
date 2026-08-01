@@ -1106,12 +1106,14 @@ export default {
               :class="{
                 active: selectedIds.includes(entry.item.id),
                 dragging: String(draggedLayerId) === String(entry.item.id),
-                'drag-over': String(dragOverLayerId) === String(entry.item.id)
+                'drag-over': String(dragOverLayerId) === String(entry.item.id),
+                renaming: isLayerRenaming(entry.item.id)
               }"
-              draggable="true"
+              :draggable="!isLayerRenaming(entry.item.id)"
               role="button"
               tabindex="0"
               @click="selectLayerSidebarItem(entry.item)"
+              @dblclick="startLayerRename(entry.item, $event)"
               @contextmenu="handleLayerContextMenu($event, entry.item)"
               @keydown.enter.prevent="selectLayerSidebarItem(entry.item)"
               @keydown.space.prevent="selectLayerSidebarItem(entry.item)"
@@ -1121,7 +1123,22 @@ export default {
               @drop="handleLayerDrop($event, entry)"
               @dragend="handleLayerDragEnd"
           >
-            <span class="layer-list-title">{{ entry.title }}</span>
+            <input
+                v-if="isLayerRenaming(entry.item.id)"
+                ref="layerRenameInputRef"
+                :value="layerRenameValue"
+                class="layer-rename-input"
+                type="text"
+                aria-label="Layer name"
+                @mousedown.stop
+                @click.stop
+                @dblclick.stop
+                @input="setLayerRenameValue($event.target.value)"
+                @blur="commitLayerRename"
+                @keydown.enter.stop.prevent="commitLayerRename"
+                @keydown.escape.stop.prevent="cancelLayerRename"
+            >
+            <span v-else class="layer-list-title">{{ entry.title }}</span>
             <span class="layer-list-meta">Layer {{ entry.layerIndex + 1 }}</span>
           </div>
         </div>
