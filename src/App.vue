@@ -79,6 +79,21 @@ export default {
             <span>Snap to grid</span>
           </label>
 
+          <div class="control-row">
+            <span>Mode</span>
+            <div class="segmented-control">
+              <button
+                  v-for="option in pageGridModeOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: canvasGridMode === option.value }"
+                  @click="canvasGridMode = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+
           <label class="control-row">
             <span>Size (px)</span>
             <input
@@ -2425,6 +2440,11 @@ export default {
                 v-for="line in pageGridLineConfigs"
                 :key="line.id"
                 :config="line"
+            />
+            <v-line
+                v-for="dot in pageGridDotConfigs"
+                :key="dot.id"
+                :config="dot"
             />
             <v-rect :config="pageMarginGuideConfig" />
             <v-rect

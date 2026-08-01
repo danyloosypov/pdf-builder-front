@@ -205,8 +205,13 @@ const DEFAULT_PAGE_COLUMN_SETTINGS = {
 const DEFAULT_PAGE_GRID_SETTINGS = {
   visible: true,
   snap: false,
+  mode: 'lines',
   size: 20
 }
+const pageGridModeOptions = [
+  { value: 'lines', label: 'Lines' },
+  { value: 'dots', label: 'Dots' }
+]
 const MIN_PAGE_GRID_SIZE = 8
 const MAX_PAGE_GRID_SIZE = 240
 const PAGE_GRID_MAJOR_INTERVAL = 5
@@ -364,6 +369,15 @@ function getNormalizedPageGridSize(value) {
   return clampNumber(Math.round(numericValue), MIN_PAGE_GRID_SIZE, MAX_PAGE_GRID_SIZE)
 }
 
+function getNormalizedPageGridMode(value) {
+  const mode = String(value || '').trim().toLowerCase()
+
+  if (['dot', 'dots', 'dotted', 'points'].includes(mode)) return 'dots'
+  if (['line', 'lines'].includes(mode)) return 'lines'
+
+  return DEFAULT_PAGE_GRID_SETTINGS.mode
+}
+
 function getNormalizedPageGridBoolean(source, keys, fallback) {
   const foundKey = keys.find(key => source[key] !== undefined)
 
@@ -384,6 +398,7 @@ function getNormalizedPageGridSettings(settings = {}) {
       ['snap', 'snapToGrid', 'gridSnap'],
       DEFAULT_PAGE_GRID_SETTINGS.snap
     ),
+    mode: getNormalizedPageGridMode(source.mode ?? source.gridMode ?? source.displayMode ?? source.type),
     size: getNormalizedPageGridSize(source.size ?? source.gridSize ?? source.spacing)
   }
 }
@@ -683,6 +698,15 @@ const canvasSnapToGrid = computed({
     pageGridSettings.value = getNormalizedPageGridSettings({
       ...pageGridSettings.value,
       snap: value
+    })
+  }
+})
+const canvasGridMode = computed({
+  get: () => pageGridSettings.value.mode,
+  set: value => {
+    pageGridSettings.value = getNormalizedPageGridSettings({
+      ...pageGridSettings.value,
+      mode: value
     })
   }
 })
@@ -1124,6 +1148,7 @@ function getPageGridLineConfigs() {
   const settings = getNormalizedPageGridSettings(pageGridSettings.value)
 
   if (!settings.visible || isPdfExporting.value || isPreviewMode.value) return []
+  if (settings.mode !== 'lines') return []
 
   const config = pageConfig.value
   const lines = []
@@ -1162,6 +1187,39 @@ function getPageGridLineConfigs() {
   }
 
   return lines
+}
+
+function getPageGridDotConfigs() {
+  const settings = getNormalizedPageGridSettings(pageGridSettings.value)
+
+  if (!settings.visible || isPdfExporting.value || isPreviewMode.value) return []
+  if (settings.mode !== 'dots') return []
+
+  const config = pageConfig.value
+  const dots = []
+  const gridSize = settings.size
+  const rounded = value => Math.round(value * 1000) / 1000
+  const startX = rounded(config.x + gridSize)
+  const endX = rounded(config.x + config.width - gridSize)
+
+  if (endX < startX) return dots
+
+  for (let offset = gridSize, index = 1; offset < config.height; offset += gridSize, index += 1) {
+    const y = rounded(config.y + offset)
+
+    dots.push({
+      id: `page-grid-dot-${activePageId.value}-${index}`,
+      points: [startX, y, endX, y],
+      stroke: 'rgba(148, 163, 184, 0.68)',
+      strokeWidth: 2,
+      lineCap: 'round',
+      dash: [0.01, Math.max(1, gridSize - 0.01)],
+      listening: false,
+      perfectDrawEnabled: false
+    })
+  }
+
+  return dots
 }
 
 const pageConfig = computed(() => ({
@@ -1226,6 +1284,7 @@ const pageMarginGuideConfig = computed(() => {
 })
 const pageColumnGuideConfigs = computed(() => getPageColumnGuideConfigs())
 const pageGridLineConfigs = computed(() => getPageGridLineConfigs())
+const pageGridDotConfigs = computed(() => getPageGridDotConfigs())
 const pageWatermarkTextConfigs = computed(() => getPageWatermarkTextConfigs())
 const pageWatermarkImageConfigs = computed(() => getPageWatermarkImageConfigs())
 const pageClipConfig = computed(() => ({
@@ -11814,6 +11873,8 @@ onBeforeUnmount(() => {
     pageGridSettings,
     canvasGridVisible,
     canvasSnapToGrid,
+    canvasGridMode,
+    pageGridModeOptions,
     canvasGridSize,
     MIN_PAGE_GRID_SIZE,
     MAX_PAGE_GRID_SIZE,
@@ -11836,6 +11897,7 @@ onBeforeUnmount(() => {
     pageMarginGuideConfig,
     pageColumnGuideConfigs,
     pageGridLineConfigs,
+    pageGridDotConfigs,
     pageWatermarkTextConfigs,
     pageWatermarkImageConfigs,
     bandGuideConfigs,
